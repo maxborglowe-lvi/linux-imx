@@ -1237,6 +1237,13 @@ config VIDEO_TC358746
 	  To compile this driver as a module, choose M here: the
 	  module will be called tc358746.
 
+config VIDEO_LVICAM
+	tristate "LVI bridge board"
+	depends on VIDEO_V4L2 && I2C && VIDEO_V4L2_SUBDEV_API && MEDIA_CONTROLLER
+	select V4L2_FWNODE
+	help
+	  TODO
+
 config VIDEO_TVP514X
 	tristate "Texas Instruments TVP514x video decoder"
 	depends on VIDEO_DEV && I2C

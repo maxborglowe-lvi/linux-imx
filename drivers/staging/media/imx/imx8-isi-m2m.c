@@ -498,6 +498,8 @@ static void isi_m2m_fmt_init(struct mxc_isi_frame *frm, struct mxc_isi_fmt *fmt)
 static int isi_m2m_try_fmt(struct mxc_isi_frame *frame,
 				struct v4l2_format *f)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct v4l2_pix_format_mplane *pix = &f->fmt.pix_mp;
 	struct mxc_isi_fmt *fmt = NULL, *formats;
 	int size;
@@ -566,6 +568,8 @@ static int isi_m2m_try_fmt(struct mxc_isi_frame *frame,
 
 static int mxc_isi_m2m_open(struct file *file)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct video_device *vdev = video_devdata(file);
 	struct mxc_isi_m2m_dev *isi_m2m = video_drvdata(file);
 	struct mxc_isi_dev *mxc_isi = mxc_isi_get_hostdata(isi_m2m->pdev);
@@ -678,6 +682,8 @@ static int mxc_isi_m2m_querycap(struct file *file, void *priv,
 static int mxc_isi_m2m_enum_fmt_vid_out(struct file *file, void *priv,
 				    struct v4l2_fmtdesc *f)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_m2m_dev *isi_m2m = video_drvdata(file);
 	struct mxc_isi_fmt *fmt;
 
@@ -686,6 +692,9 @@ static int mxc_isi_m2m_enum_fmt_vid_out(struct file *file, void *priv,
 		return -EINVAL;
 
 	fmt = &mxc_isi_input_formats[f->index];
+
+	printk("[%s] call : lvicam : (mxc_isi_input_formats) fmt->name = %s", __func__, fmt->name);
+
 	strncpy(f->description, fmt->name, sizeof(f->description) - 1);
 
 	f->pixelformat = fmt->fourcc;
@@ -750,6 +759,8 @@ static int mxc_isi_m2m_try_fmt_vid_cap(struct file *file, void *fh,
 static int mxc_isi_m2m_s_fmt_vid_out(struct file *file, void *priv,
 				 struct v4l2_format *f)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_m2m_dev *isi_m2m = video_drvdata(file);
 	struct v4l2_fh *fh = file->private_data;
 	struct mxc_isi_frame *frame = &isi_m2m->src_f;

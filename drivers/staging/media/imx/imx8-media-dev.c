@@ -311,6 +311,7 @@ static int mxc_md_create_links(struct mxc_md *mxc_md)
 	u32 flags;
 	u32 mipi_vc = 0;
 
+	printk("lvicam %s",__func__);
 	/* Create links between each ISI's subdev and video node */
 	flags = MEDIA_LNK_FL_ENABLED;
 	for (i = 0; i < MXC_ISI_MAX_DEVS; i++) {
@@ -319,6 +320,7 @@ static int mxc_md_create_links(struct mxc_md *mxc_md)
 			continue;
 
 		/* Connect ISI source to video device */
+		printk("lvicam: %s %s", mxc_isi->sd_name, mxc_isi->vdev_name);
 		source = find_entity_by_name(mxc_md, mxc_isi->sd_name);
 		sink = find_entity_by_name(mxc_md, mxc_isi->vdev_name);
 		sink_pad = 0;
@@ -474,6 +476,7 @@ static int mxc_md_create_links(struct mxc_md *mxc_md)
 
 	/* Connect MIPI Sensor to MIPI CSI2 */
 	for (i = 0; i < num_sensors; i++) {
+		printk("lvicam: num_sensors %d", num_sensors);
 		sensor = &mxc_md->sensor[i];
 		if (!sensor || !sensor->sd)
 			continue;
@@ -519,6 +522,7 @@ static int mxc_md_create_links(struct mxc_md *mxc_md)
 
 			source = &sensor->sd->entity;
 			sink = find_entity_by_name(mxc_md, mipi_csi2->sd_name);
+			printk("lvicam csi2: %s", mipi_csi2->sd_name);
 			source_pad = 0;
 			sink_pad = source_pad;
 
@@ -530,6 +534,7 @@ static int mxc_md_create_links(struct mxc_md *mxc_md)
 							    sink_pad + j,
 							    MEDIA_LNK_FL_IMMUTABLE |
 							    MEDIA_LNK_FL_ENABLED);
+								printk("lvicam: %s @ %d ret : %d",__func__, __LINE__, ret);
 				if (ret)
 					return ret;
 
@@ -538,6 +543,7 @@ static int mxc_md_create_links(struct mxc_md *mxc_md)
 							&sink->pads[sink_pad + j],
 							&source->pads[source_pad + j],
 							0);
+							printk("lvicam: %s @ %d ret : %d",__func__, __LINE__, ret);
 				if (ret)
 					return ret;
 
@@ -562,6 +568,8 @@ static int subdev_notifier_bound(struct v4l2_async_notifier *notifier,
 				 struct v4l2_subdev *sd,
 				 struct v4l2_async_connection *asd)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_md *mxc_md = notifier_to_mxc_md(notifier);
 	struct mxc_sensor_info *sensor = NULL;
 	int i;
@@ -576,8 +584,11 @@ static int subdev_notifier_bound(struct v4l2_async_notifier *notifier,
 		}
 	}
 
-	if (!sensor)
+	if (!sensor) {
+		printk("[%s] call : lvicam : failed to register sensor", __func__);
+
 		return -EINVAL;
+	}
 
 	sd->grp_id = GRP_ID_MXC_SENSOR;
 	sensor->sd = sd;
@@ -591,6 +602,8 @@ static int subdev_notifier_bound(struct v4l2_async_notifier *notifier,
 
 static int subdev_notifier_complete(struct v4l2_async_notifier *notifier)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_md *mxc_md = notifier_to_mxc_md(notifier);
 	int ret;
 
@@ -598,8 +611,11 @@ static int subdev_notifier_complete(struct v4l2_async_notifier *notifier)
 	mutex_lock(&mxc_md->media_dev.graph_mutex);
 
 	ret = mxc_md_create_links(mxc_md);
-	if (ret < 0)
+	if (ret < 0) {
+		printk("[%s] call : lvicam : mxc_md_create_links failed!", __func__);
+
 		goto unlock;
+	}
 
 	mxc_md->link_status = 1;
 
