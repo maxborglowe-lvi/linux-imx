@@ -108,7 +108,17 @@ struct mxc_isi_fmt mxc_isi_out_formats[] = {
 		.memplanes	= 1,
 		.colplanes	= 1,
 		.mbus_code	= MEDIA_BUS_FMT_RGB888_1X24,
-	}
+	},
+	
+	// {
+	// 	.name		= "YUYV-16",
+	// 	.fourcc		= V4L2_PIX_FMT_YUYV,
+	// 	.depth		= { 16 },
+	// 	.color		= MXC_ISI_OUT_FMT_YUV422_1P8P,
+	// 	.memplanes	= 1,
+	// 	.colplanes	= 1,
+	// 	.mbus_code	= MEDIA_BUS_FMT_UYVY8_2X8,
+	// },
 };
 
 /*
@@ -121,7 +131,10 @@ struct mxc_isi_fmt mxc_isi_src_formats[] = {
 		.depth		= { 32 },
 		.memplanes	= 1,
 		.colplanes	= 1,
-	}, {
+	}, 
+	
+	// Den här används av LVI.
+	{
 		.name		= "YUV32 (X-Y-U-V)",
 		.fourcc		= V4L2_PIX_FMT_YUV32,
 		.depth		= { 32 },
@@ -132,6 +145,8 @@ struct mxc_isi_fmt mxc_isi_src_formats[] = {
 
 struct mxc_isi_fmt *mxc_isi_get_format(unsigned int index)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	return &mxc_isi_out_formats[index];
 }
 
@@ -141,6 +156,8 @@ struct mxc_isi_fmt *mxc_isi_get_format(unsigned int index)
 struct mxc_isi_fmt *mxc_isi_find_format(const u32 *pixelformat,
 					const u32 *mbus_code, int index)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_fmt *fmt, *def_fmt = NULL;
 	unsigned int i;
 	int id = 0;
@@ -150,10 +167,18 @@ struct mxc_isi_fmt *mxc_isi_find_format(const u32 *pixelformat,
 
 	for (i = 0; i < ARRAY_SIZE(mxc_isi_out_formats); i++) {
 		fmt = &mxc_isi_out_formats[i];
-		if (pixelformat && fmt->fourcc == *pixelformat)
+		if (pixelformat && fmt->fourcc == *pixelformat) {
+			printk("[%s] call : lvicam : pixelformat && fmt->fourcc == *pixelformat : %s", __func__, fmt->name);
+
 			return fmt;
-		if (mbus_code && fmt->mbus_code == *mbus_code)
+		}
+
+		if (mbus_code && fmt->mbus_code == *mbus_code) {
+			printk("[%s] call : lvicam : mbus_code && fmt->mbus_code == *mbus_code : %s", __func__, fmt->name);
+
 			return fmt;
+		}
+
 		if (index == id)
 			def_fmt = fmt;
 		id++;
@@ -163,6 +188,8 @@ struct mxc_isi_fmt *mxc_isi_find_format(const u32 *pixelformat,
 
 struct mxc_isi_fmt *mxc_isi_get_src_fmt(struct v4l2_subdev_format *sd_fmt)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	u32 index;
 
 	/* two fmt RGB32 and YUV444 from pixellink */
@@ -187,6 +214,8 @@ static inline struct mxc_isi_buffer *to_isi_buffer(struct vb2_v4l2_buffer *v4l2_
  */
 static int mxc_isi_pipeline_enable(struct mxc_isi_cap_dev *isi_cap, bool enable)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct device *dev = &isi_cap->pdev->dev;
 	struct media_entity *entity = &isi_cap->vdev.entity;
 	struct media_device *mdev = entity->graph_obj.mdev;
@@ -232,8 +261,37 @@ static int mxc_isi_pipeline_enable(struct mxc_isi_cap_dev *isi_cap, bool enable)
 	return ret;
 }
 
+// static int mxc_isi_update_buf_paddr(struct mxc_isi_buffer *buf, int memplanes)
+// {
+// 	struct frame_addr *paddr = &buf->paddr;
+// 	struct vb2_buffer *vb2 = &buf->v4l2_buf.vb2_buf;
+
+// 	paddr->cb = 0;
+// 	paddr->cr = 0;
+
+// 	switch (memplanes) {
+// 	case 3:
+// 		paddr->cr = vb2_dma_contig_plane_dma_addr(vb2, 2);
+// 		/* fall through */
+// 	case 2:
+// 		paddr->cb = vb2_dma_contig_plane_dma_addr(vb2, 1);
+// 		/* fall through */
+// 	case 1:
+// 		paddr->y = vb2_dma_contig_plane_dma_addr(vb2, 0);
+// 		break;
+// 	default:
+// 		return -EINVAL;
+// 	}
+
+// 	return 0;
+// }
+
 static int mxc_isi_update_buf_paddr(struct mxc_isi_buffer *buf, int memplanes)
 {
+	printk("[%s] call : lvicam", __func__);
+
+	printk("[%s] call : lvicam : memplanes = %d", __func__, memplanes);
+
 	struct frame_addr *paddr = &buf->paddr;
 	struct vb2_buffer *vb2 = &buf->v4l2_buf.vb2_buf;
 
@@ -242,15 +300,19 @@ static int mxc_isi_update_buf_paddr(struct mxc_isi_buffer *buf, int memplanes)
 
 	switch (memplanes) {
 	case 3:
+		printk("[%s] call : lvicam : memplanes 3", __func__);
 		paddr->cr = vb2_dma_contig_plane_dma_addr(vb2, 2);
 		/* fall through */
 	case 2:
+		printk("[%s] call : lvicam : memplanes 2", __func__);
 		paddr->cb = vb2_dma_contig_plane_dma_addr(vb2, 1);
 		/* fall through */
 	case 1:
+		printk("[%s] call : lvicam : memplanes 1", __func__);
 		paddr->y = vb2_dma_contig_plane_dma_addr(vb2, 0);
 		break;
 	default:
+		printk("[%s] call : lvicam : memplanes ERROR", __func__);
 		return -EINVAL;
 	}
 
@@ -406,6 +468,8 @@ static void cap_vb2_buffer_queue(struct vb2_buffer *vb2)
 
 static int cap_vb2_start_streaming(struct vb2_queue *q, unsigned int count)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_cap_dev *isi_cap = vb2_get_drv_priv(q);
 	struct mxc_isi_dev *mxc_isi = mxc_isi_get_hostdata(isi_cap->pdev);
 	struct mxc_isi_buffer *buf;
@@ -481,6 +545,8 @@ static int cap_vb2_start_streaming(struct vb2_queue *q, unsigned int count)
 
 static void cap_vb2_stop_streaming(struct vb2_queue *q)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_cap_dev *isi_cap = vb2_get_drv_priv(q);
 	struct mxc_isi_dev *mxc_isi = mxc_isi_get_hostdata(isi_cap->pdev);
 	struct mxc_isi_buffer *buf;
@@ -984,6 +1050,8 @@ static int mxc_isi_cap_try_fmt_mplane(struct file *file, void *fh,
 /* Update input frame size and formate  */
 static int mxc_isi_source_fmt_init(struct mxc_isi_cap_dev *isi_cap)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_frame *src_f = &isi_cap->src_f;
 	struct mxc_isi_frame *dst_f = &isi_cap->dst_f;
 	struct v4l2_subdev_format src_fmt;
@@ -1024,6 +1092,8 @@ static int mxc_isi_source_fmt_init(struct mxc_isi_cap_dev *isi_cap)
 
 	/* Pixel link master will transfer format to RGB32 or YUV32 */
 	src_f->fmt = mxc_isi_get_src_fmt(&src_fmt);
+
+	printk("[%s] call : lvicam : src_f->fmt->name = %s", __func__, src_f->fmt->name);
 
 	set_frame_bounds(src_f, src_fmt.format.width, src_fmt.format.height);
 
@@ -1124,6 +1194,8 @@ static int mxc_isi_cap_s_fmt_mplane(struct file *file, void *priv,
 
 static int mxc_isi_config_parm(struct mxc_isi_cap_dev *isi_cap)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_dev *mxc_isi = mxc_isi_get_hostdata(isi_cap->pdev);
 	int ret;
 
@@ -1167,6 +1239,8 @@ static int mxc_isi_cap_s_parm(struct file *file, void *fh,
 static int mxc_isi_cap_streamon(struct file *file, void *priv,
 				enum v4l2_buf_type type)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_cap_dev *isi_cap = video_drvdata(file);
 	struct mxc_isi_dev *mxc_isi = mxc_isi_get_hostdata(isi_cap->pdev);
 	struct device *dev = &isi_cap->pdev->dev;
@@ -1213,6 +1287,8 @@ power:
 static int mxc_isi_cap_streamoff(struct file *file, void *priv,
 				 enum v4l2_buf_type type)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_cap_dev *isi_cap = video_drvdata(file);
 	struct mxc_isi_dev *mxc_isi = mxc_isi_get_hostdata(isi_cap->pdev);
 	struct device *dev = &isi_cap->pdev->dev;

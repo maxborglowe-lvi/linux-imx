@@ -1826,6 +1826,8 @@ static int mipi_csis_probe(struct platform_device *pdev)
 	const struct of_device_id *of_id;
 	int ret = -ENOMEM;
 
+	debug = 2;
+
 	state = devm_kzalloc(dev, sizeof(*state), GFP_KERNEL);
 	if (!state)
 		return -ENOMEM;
