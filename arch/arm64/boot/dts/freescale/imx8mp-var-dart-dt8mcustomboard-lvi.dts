@@ -279,6 +279,7 @@
 	};
 };
 
+//I2C communication with toshiba, lvi_panel, etc.
 &i2c3 {
 	clock-frequency = <400000>;
 	pinctrl-names = "default", "gpio";
@@ -287,6 +288,16 @@
 	scl-gpios = <&gpio5 18 GPIO_ACTIVE_HIGH>;
 	sda-gpios = <&gpio5 19 GPIO_ACTIVE_HIGH>;
 	status = "okay";
+
+	lvipanel@49 {
+		reg = <0x49>;
+		//compatible = "brcm,bcm2835";
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+		compatible = "lvipanel";
+
+    };
 
 	csi-bridge@e {
 		reg = <0x0e>; // I2C Address?
@@ -307,20 +318,20 @@
 
 			 /* Output, in this case the IMX CSI port*/
 			 port@0 {
-				 reg = <0>;
+				reg = <0>;
+			
+				tc358746_mipi2_out: endpoint {
+				remote-endpoint = <&mipi_csi0_ep>;
+				//data-lanes = <1 2 3 4>;
 
-				 tc358746_mipi2_out: endpoint {
-					remote-endpoint = <&mipi_csi0_ep>;
-					//data-lanes = <1 2 3 4>;
-
-					//Two lanes for colorbar
-					data-lanes = <1 2 3 4>;
- 					//clock-noncontinuous;
-					 clock-continuous;
- 					//link-frequencies = /bits/ 64 <216000000>;
-					//link-frequencies = /bits/ 64 <297000000>;
-					link-frequencies = /bits/ 64 <594000000>;
-				 };
+				//Two lanes for colorbar
+				data-lanes = <1 2 3 4>;
+				//clock-noncontinuous;
+					clock-continuous;
+				//link-frequencies = /bits/ 64 <216000000>;
+				//link-frequencies = /bits/ 64 <297000000>;
+				link-frequencies = /bits/ 64 <594000000>;
+				};
 			};
 			// 	 			tc358743_out: endpoint {
 			// 	remote-endpoint = <&mipi_csi2_in>;

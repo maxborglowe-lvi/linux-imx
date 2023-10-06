@@ -13,6 +13,12 @@ menuconfig INPUT_MISC
 
 if INPUT_MISC
 
+config INPUT_LVIPANEL
+	tristate "LVI panel driver"
+	depends on NET
+	help
+	  This module provides support for LVI PANEL communication.
+
 config INPUT_88PM860X_ONKEY
 	tristate "88PM860x ONKEY support"
 	depends on MFD_88PM860X
