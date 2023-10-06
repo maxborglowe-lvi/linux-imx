@@ -13,7 +13,7 @@ menuconfig INPUT_MISC
 
 if INPUT_MISC
 
-config INPUT_LVI_PANEL
+config INPUT_LVIPANEL
 	tristate "LVI panel driver"
 	depends on NET
 	help
