@@ -896,6 +896,11 @@ static bool joydev_match(struct input_handler *handler, struct input_dev *dev)
 	if (joydev_dev_is_absolute_mouse(dev))
 		return false;
 
+	/* Avoid EETI virtual devices */
+	#define VID_EETI 0x0EEF
+	if (( BUS_VIRTUAL == dev->id.bustype) && (VID_EETI == dev->id.vendor))
+	return false;
+
 	return true;
 }
 
@@ -1066,7 +1071,7 @@ MODULE_DEVICE_TABLE(input, joydev_ids);
 
 static struct input_handler joydev_handler = {
 	.event		= joydev_event,
-	.match		= joydev_match,
+	.match 		= joydev_match,
 	.connect	= joydev_connect,
 	.disconnect	= joydev_disconnect,
 	.legacy_minors	= true,
