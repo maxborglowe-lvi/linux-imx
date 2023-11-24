@@ -1,5 +1,3 @@
-
-
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/i2c.h>
@@ -10,7 +8,7 @@
 #include <linux/fs.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
-#include <net/sock.h> 
+#include <net/sock.h>
 #include <linux/netlink.h>
 #include <linux/skbuff.h>
 #include "lvipanel_commands.h"
@@ -46,6 +44,7 @@ static int lvipanel_write_byte(struct i2c_client *client, u8 byte);
 static int lvipanel_write_byte_array(struct i2c_client *client, u8 *byte_array, size_t size);
 static int lvipanel_probe(struct i2c_client *client, const struct i2c_device_id *id);
 static int lvipanel_remove(struct i2c_client *client);
+static void lvipanel_shutdown(struct i2c_client *client);
 static void nl_recv_msg(struct sk_buff *skb);
 static void nl_send_data_to_user(char value);
 
@@ -144,9 +143,7 @@ u8 lvipanel_read_byte(struct i2c_client *client)
 
             nl_send_data_to_user(read_byte);
         }
-
     }
-
     return read_byte;
 }
 
@@ -206,7 +203,6 @@ static void nl_send_data_to_user(char value)
         printk(KERN_WARNING "User PID not set, skipping netlink send\n");
     }
 }
-
 
 /** @brief Writes a byte of i2c data to the LVI Panel. */
 static int lvipanel_write_byte(struct i2c_client *client, u8 byte)
@@ -284,10 +280,10 @@ static int lvipanel_probe(struct i2c_client *client, const struct i2c_device_id 
     The commands are specified in lvi_panel_commands.h */
     u8 init_buff[] =
     {
+        COMM_SYSTEM_ON,
+        COMM_SYSTEM_ON,
         COMM_START_SC,
-        COMM_LD_OFF,
-        COMM_LD_GREENFLASH,
-        COMM_LD_GREENFLASH
+        COMM_START_SC,
     };
 
     size_t buff_size = sizeof(init_buff)/sizeof(init_buff[0]);
@@ -316,9 +312,10 @@ static int lvipanel_remove(struct i2c_client *client)
     /* Commands that shall be sent upon removal of LVI Panel drive module */
     u8 exit_buff[] =
     {
-        COMM_LD_OFF,
-        COMM_LD_REDFLASH,
-        COMM_STOP_SC
+        COMM_SYSTEM_OFF,
+        COMM_SYSTEM_OFF,
+        COMM_STOP_SC,
+        COMM_STOP_SC,
     };
 
     size_t buff_size = sizeof(exit_buff)/sizeof(exit_buff[0]);
@@ -334,6 +331,34 @@ static int lvipanel_remove(struct i2c_client *client)
     return 0;
 }
 
+/** @brief Cleanup function when system is shut down */
+static void lvipanel_shutdown(struct i2c_client *client)
+{
+    printk("[%s] call", __func__);
+
+    sysfs_remove_file(i2c_kobj, &i2c_data_attribute.attr);
+    kobject_put(i2c_kobj);
+
+    /* Commands that shall be sent upon removal of LVI Panel drive module */
+    u8 exit_buff[] =
+    {
+        COMM_SYSTEM_OFF,
+        COMM_SYSTEM_OFF,
+        COMM_STOP_SC,
+        COMM_STOP_SC,
+    };
+
+    size_t buff_size = sizeof(exit_buff)/sizeof(exit_buff[0]);
+    lvipanel_write_byte_array(client, exit_buff, buff_size);
+
+    // Stop the polling thread
+    kthread_stop(poll_thread);
+
+    netlink_kernel_release(nl_sk);
+
+    printk(KERN_INFO "LVI Panel removed upon shutdown");
+}
+
 static const struct of_device_id __maybe_unused lvipanel_of_match[] = {
     { .compatible = "lvipanel", },
     { },
@@ -347,7 +372,7 @@ static struct i2c_driver lvipanel_driver = {
     },
     .probe = lvipanel_probe,
     .remove = lvipanel_remove,
+    .shutdown = lvipanel_shutdown,
 };
 
 module_i2c_driver(lvipanel_driver);
-
