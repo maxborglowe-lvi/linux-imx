@@ -1636,4 +1636,9 @@ config GPIO_MOCKUP
 	  tools/testing/selftests/gpio/gpio-mockup.sh. Reference the usage in
 	  it.
 
+config GPIO_LVISEESAW
+	tristate "LVI seesaw card driver"
+	help
+	  Used for receiving custom LVI GPIO signals.
+
 endif

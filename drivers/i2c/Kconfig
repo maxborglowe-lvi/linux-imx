@@ -36,6 +36,12 @@ config ACPI_I2C_OPREGION
 
 if I2C
 
+config I2C_LVICONFIG
+    tristate "LVICONFIG I2C driver"
+    depends on I2C
+    help
+      This driver supports the LVICONFIG EEPROM.
+
 config I2C_BOARDINFO
 	bool
 	default y

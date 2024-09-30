@@ -3,6 +3,7 @@
 # Makefile for the i2c core.
 #
 
+
 obj-$(CONFIG_I2C_BOARDINFO)	+= i2c-boardinfo.o
 obj-$(CONFIG_I2C)		+= i2c-core.o
 i2c-core-objs 			:= i2c-core-base.o i2c-core-smbus.o
@@ -17,5 +18,6 @@ obj-y				+= algos/ busses/ muxes/
 obj-$(CONFIG_I2C_STUB)		+= i2c-stub.o
 obj-$(CONFIG_I2C_SLAVE_EEPROM)	+= i2c-slave-eeprom.o
 obj-$(CONFIG_I2C_SLAVE_TESTUNIT)	+= i2c-slave-testunit.o
+obj-$(CONFIG_I2C_LVICONFIG)		+= lviconfig.o
 
 ccflags-$(CONFIG_I2C_DEBUG_CORE) := -DDEBUG

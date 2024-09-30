@@ -1,378 +1,254 @@
-#include <linux/init.h>
 #include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/i2c.h>
-#include <linux/sched.h>
-#include <linux/delay.h>
-#include <linux/kthread.h>
-#include <linux/of.h>
 #include <linux/fs.h>
-#include <linux/kobject.h>
-#include <linux/sysfs.h>
-#include <net/sock.h>
-#include <linux/netlink.h>
-#include <linux/skbuff.h>
-#include "lvipanel_commands.h"
-
-MODULE_AUTHOR("Max Borglowe");
-MODULE_DESCRIPTION("I2C Polling Driver");
-MODULE_LICENSE("GPL");
-
-#define NETLINK_USER 31
-struct sock *nl_sk = NULL;
-static int user_pid = 0;
-
-#define SYSFS_FILENAME "i2c_data"
-#ifdef I2C_DATA_BUFFER_SIZE
-static u8 i2c_data_buffer[I2C_DATA_BUFFER_SIZE];
-#else
-static u8 i2c_data_buffer[1];
-#endif
+#include <linux/uaccess.h>
+#include <linux/ioctl.h>
+#include <linux/of.h>  // For device tree support
+#include <linux/sched.h>  // For sending signals
+#include <linux/signal.h>
+#include <linux/kthread.h>    // For kernel threads
+#include <linux/delay.h>      // For msleep
 
 #define DEVICE_NAME "lvipanel"
-#define I2C_DEVICE_ADDR 0x49
+#define IOCTL_READ_DATA _IOR('i', 1, char)
+#define IOCTL_WRITE_DATA _IOW('i', 2, char)
+#define IOCTL_POLL_DATA _IOW('i', 3, char)
 
-static struct kobject *i2c_kobj;
-static struct i2c_client *lvipanel_client;
-static struct task_struct *poll_thread;
+// Signal to send to the user space application
+#define DATA_AVAILABLE_SIGNAL SIGUSR1
 
-// Function prototypes
-static ssize_t i2c_data_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
-static ssize_t i2c_data_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count);
-static int lvipanel_polling_thread(void *data);
-static u8 lvipanel_read_byte(struct i2c_client *client);
-static int lvipanel_write_byte(struct i2c_client *client, u8 byte);
-static int lvipanel_write_byte_array(struct i2c_client *client, u8 *byte_array, size_t size);
-static int lvipanel_probe(struct i2c_client *client, const struct i2c_device_id *id);
-static int lvipanel_remove(struct i2c_client *client);
-static void lvipanel_shutdown(struct i2c_client *client);
-static void nl_recv_msg(struct sk_buff *skb);
-static void nl_send_data_to_user(char value);
+static struct task_struct *polling_thread;  // Kernel thread for polling
+static bool keep_polling = true;            // Control flag for polling
 
-// Netlink configuration
-static struct netlink_kernel_cfg nl_cfg = {
-    .input = nl_recv_msg,
-};
+static int major;
+static struct class *lvipanel_class;
+static struct i2c_client *i2c_client;
+static pid_t user_pid;  // To store the PID of the user space application
 
-/** @brief Show I2C data in sysfs. */
-static ssize_t i2c_data_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
-{
-    #ifdef I2C_DATA_BUFFER_SIZE
-    ssize_t len = 0;
+char i2c_data;
 
-    for (i = 0; i < I2C_DATA_BUFFER_SIZE; i++) {
-        len += sprintf(buf + len, "0x%02x ", i2c_data_buffer[i]);
-    }
 
-    len += sprintf(buf + len, "\n");
-    return len;
-
-    #else
-    return snprintf(buf, PAGE_SIZE, "0x%02x\n", i2c_data_buffer[0]);
-    #endif
-}
-
-/** @brief Store data in sysfs file. */
-static ssize_t i2c_data_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
-{
-    int parsed_bytes = 0;
-
-    #ifdef I2C_DATA_BUFFER_SIZE
-    int i;
-    for (i = 0; i < I2C_DATA_BUFFER_SIZE; i++) {
-        int bytes_read = sscanf(buf + parsed_bytes, "0x%hhx", &i2c_data_buffer[i]);
-        if (bytes_read <= 0) {
-            break;
-        }
-        parsed_bytes += bytes_read;
-    }
-
-    #else
-    u8 data;
-    parsed_bytes = sscanf(buf, "0x%hhx", &data);
-    if (parsed_bytes > 0) {
-        i2c_data_buffer[0] = data;
-    }
-    #endif
-
-    return count;
-}
-
-static struct kobj_attribute i2c_data_attribute = __ATTR(i2c_data, 0660, i2c_data_show, i2c_data_store);
-
-/** @brief Polling function executed in the kernel thread. */
-static int lvipanel_polling_thread(void *data)
-{
-    printk("[%s] call", __func__);
-
-    while (!kthread_should_stop()) {
-        lvipanel_read_byte(lvipanel_client);
-
-        // Polling interval
-        msleep_interruptible(50); // 0.5 second delay
-    }
-
-    return 0;
-}
-
-/** @brief Reads a byte of i2c data from the LVI Panel. */
-u8 lvipanel_read_byte(struct i2c_client *client)
-{
-    struct i2c_msg msg;
-    char read_byte;
-    int ret;
-
-    // Prepare the I2C messages for read operation
-    msg.addr = I2C_DEVICE_ADDR;
-    msg.flags = I2C_M_RD;
-    msg.len = 1; // Number of bytes to read
-    msg.buf = &read_byte;
-
-    ret = i2c_transfer(client->adapter, &msg, 1);
-    if (ret < 0) {
-        printk(KERN_ERR "I2C transfer error: %d\n", ret);
-        return ret;
-    } else {
-    
-        if(read_byte != 0x00){
-            printk(KERN_INFO "Read data: 0x%x\n", read_byte);
-            #ifdef I2C_DATA_BUFFER_SIZE
-            memmove(i2c_data_buffer + 1, i2c_data_buffer, I2C_DATA_BUFFER_SIZE - 1);
-            #endif
-            i2c_data_buffer[0] = read_byte; // Update i2c_data_buffer
-            kobject_uevent(i2c_kobj, KOBJ_CHANGE); // Notify sysfs
-
-            nl_send_data_to_user(read_byte);
-        }
-    }
-    return read_byte;
-}
-
-/** @brief Receives messages from Netlink. */
-static void nl_recv_msg(struct sk_buff *skb)
-{
-    printk("[%s] call", __func__);
-
-    struct nlmsghdr *nlh;
-    u8 value;
-
-    printk(KERN_INFO "Entering: %s\n", __FUNCTION__);
-
-    nlh = (struct nlmsghdr *)skb->data;
-    value = *((u8 *)nlmsg_data(nlh));
-
-    printk(KERN_INFO "Netlink received msg payload:%c\n", value);
-    user_pid = nlh->nlmsg_pid; /* pid of sending process */
-
-    nlh = nlmsg_hdr(skb);
-
-    if (nlh->nlmsg_len < sizeof(u8)) {
-        printk(KERN_WARNING "Invalid Netlink message length\n");
-        return;
-    }
-
-    if(value != 0x00){
-        lvipanel_write_byte(lvipanel_client, value);
-        printk(KERN_INFO "Received 0x%x from user space, and written to LVI Panel\n", value);
-    }
-    
-}
-
-/** @brief Sends data to user via Netlink. */
-static void nl_send_data_to_user(char value)
-{
-
-    printk("[%s] call", __func__);
-
-    if (user_pid != 0) {
-        struct sk_buff *skb;
-        struct nlmsghdr *nlh;
-
-        skb = nlmsg_new(NLMSG_ALIGN(sizeof(u8)), GFP_KERNEL);
-        if (!skb) {
-            printk(KERN_ERR "Failed to allocate skb\n");
-            return;
-        }
-
-        nlh = nlmsg_put(skb, 0, 0, NLMSG_DONE, sizeof(u8), 0);
-        memcpy(nlmsg_data(nlh), &value, sizeof(u8));
-
-        netlink_unicast(nl_sk, skb, user_pid, MSG_DONTWAIT);
-
-        printk(KERN_INFO "Sent netlink data: 0x%x to user process %d\n", value, user_pid);
-    } else {
-        printk(KERN_WARNING "User PID not set, skipping netlink send\n");
-    }
-}
-
-/** @brief Writes a byte of i2c data to the LVI Panel. */
-static int lvipanel_write_byte(struct i2c_client *client, u8 byte)
-{
-    struct i2c_msg msg[1];
-    int ret;
-
-    // Prepare the I2C messages for write operation
-    msg[0].addr = I2C_DEVICE_ADDR;
-    msg[0].flags = 0; // Write flag
-    msg[0].len = 1; // Number of bytes to write
-    msg[0].buf = &byte;
-
-    ret = i2c_transfer(client->adapter, msg, 1);
-    if (ret < 0) {
-        printk(KERN_ERR "Failed to send initial data: %d\n", ret);
-        return ret;
-    } else {
-        printk(KERN_INFO "Write data: 0x%x\n", byte);
-    }
-
-    return 0;
-}
-
-/** @brief Writes an array of bytes via i2c to the LVI Panel. */
-static int lvipanel_write_byte_array(struct i2c_client *client, u8 *byte_array, size_t size){
-
-    size_t i;
-    for (i = 0; i < size; i++)
-    {
-        int ret = lvipanel_write_byte(client, byte_array[i]);
-        if (ret < 0) {
-            return ret;
-        }
-    }
-
-    return 0;
-}
-
-/** @brief Initialization function when the LVI Panel is connected. */
-static int lvipanel_probe(struct i2c_client *client, const struct i2c_device_id *id)
-{
-    /* Initial stuff 
-    This part is executed once upon the initial calling of lvipanel_probe */
-
-    printk("[%s] call", __func__);
-
-    lvipanel_client = client;
-
-    i2c_kobj = kobject_create_and_add("i2c_data", NULL);
-    if (!i2c_kobj) {
-        return -ENOMEM;
-    }
-
-    if (sysfs_create_file(i2c_kobj, &i2c_data_attribute.attr)) {
-        kobject_put(i2c_kobj);
-        return -ENOMEM;
-    }
-    
-    memset(i2c_data_buffer, 0, sizeof(i2c_data_buffer));
-
-    struct netlink_kernel_cfg cfg = {
-        .input = nl_recv_msg,
-    };
-
-    nl_sk = netlink_kernel_create(&init_net, NETLINK_USER, &cfg);
-    if (!nl_sk) {
-        printk(KERN_ALERT "Error creating socket.\n");
-        return -ENOMEM;
-    }
-
-    printk(KERN_INFO "LVI Panel initiated");
-
-    /* Initial commands to be written to the LVI Panel.
-    The commands are specified in lvi_panel_commands.h */
-    u8 init_buff[] =
-    {
-        COMM_SYSTEM_ON,
-        COMM_SYSTEM_ON,
-        COMM_START_SC,
-        COMM_START_SC,
-    };
-
-    size_t buff_size = sizeof(init_buff)/sizeof(init_buff[0]);
-    lvipanel_write_byte_array(client, init_buff, buff_size);
-
-    /* End of initial stuff */
-    
-    /* Create and start the polling thread. */
-    poll_thread = kthread_run(lvipanel_polling_thread, NULL, DEVICE_NAME);
-    if (IS_ERR(poll_thread)) {
-        printk(KERN_ERR "Failed to create polling thread\n");
-        return PTR_ERR(poll_thread);
-    }
-
-    return 0;
-}
-
-/** @brief Cleanup function when the LVI Panel is disconnected. */
-static int lvipanel_remove(struct i2c_client *client)
-{
-    printk("[%s] call", __func__);
-
-    sysfs_remove_file(i2c_kobj, &i2c_data_attribute.attr);
-    kobject_put(i2c_kobj);
-
-    /* Commands that shall be sent upon removal of LVI Panel drive module */
-    u8 exit_buff[] =
-    {
-        COMM_SYSTEM_OFF,
-        COMM_SYSTEM_OFF,
-        COMM_STOP_SC,
-        COMM_STOP_SC,
-    };
-
-    size_t buff_size = sizeof(exit_buff)/sizeof(exit_buff[0]);
-    lvipanel_write_byte_array(client, exit_buff, buff_size);
-
-    // Stop the polling thread
-    kthread_stop(poll_thread);
-
-    netlink_kernel_release(nl_sk);
-
-    printk(KERN_INFO "LVI Panel removed");
-
-    return 0;
-}
-
-/** @brief Cleanup function when system is shut down */
-static void lvipanel_shutdown(struct i2c_client *client)
-{
-    printk("[%s] call", __func__);
-
-    sysfs_remove_file(i2c_kobj, &i2c_data_attribute.attr);
-    kobject_put(i2c_kobj);
-
-    /* Commands that shall be sent upon removal of LVI Panel drive module */
-    u8 exit_buff[] =
-    {
-        COMM_SYSTEM_OFF,
-        COMM_SYSTEM_OFF,
-        COMM_STOP_SC,
-        COMM_STOP_SC,
-    };
-
-    size_t buff_size = sizeof(exit_buff)/sizeof(exit_buff[0]);
-    lvipanel_write_byte_array(client, exit_buff, buff_size);
-
-    // Stop the polling thread
-    kthread_stop(poll_thread);
-
-    netlink_kernel_release(nl_sk);
-
-    printk(KERN_INFO "LVI Panel removed upon shutdown");
-}
-
-static const struct of_device_id __maybe_unused lvipanel_of_match[] = {
+/* OF match table to match the device tree node */
+static const struct of_device_id lvipanel_of_match[] = {
     { .compatible = "lvipanel", },
-    { },
+    {},
 };
 MODULE_DEVICE_TABLE(of, lvipanel_of_match);
+
+// Polling thread function
+static int lvipanel_polling_thread(void *data) {
+    struct i2c_msg msgs[1];
+    int ret;
+
+    pr_info("Polling thread started\n");
+
+    while (!kthread_should_stop() && keep_polling) {
+        // Prepare I2C read message
+        msgs[0].addr = i2c_client->addr;
+        msgs[0].flags = I2C_M_RD;
+        msgs[0].len = 1;
+        msgs[0].buf = &i2c_data;
+
+        // Perform I2C read
+        ret = i2c_transfer(i2c_client->adapter, msgs, 1);
+        if (ret < 0) {
+            pr_err("Polling failed to read from I2C device: %d\n", ret);
+        } else {
+            pr_info("Data read from I2C device: 0x%x\n", i2c_data);
+
+            // Check if data is non-zero and send signal if needed
+            if (i2c_data != 0 && user_pid > 0) {
+                pr_info("Sending signal to user space process PID: %d\n", user_pid);
+                ret = kill_pid(find_vpid(user_pid), DATA_AVAILABLE_SIGNAL, 1);
+                if (ret < 0) {
+                    pr_err("Failed to send signal to user space: %d\n", ret);
+                }
+            }
+        }
+
+        // Sleep to avoid busy polling (adjust delay as needed)
+        msleep(50); // 50 milliseconds delay
+    }
+
+    pr_info("Polling thread stopping\n");
+    return 0;
+}
+
+static long lvipanel_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+    char data;
+    int ret;
+    struct i2c_msg msgs[1];
+
+    pr_info("IOCTL command received: cmd=%d\n", cmd);
+
+    switch (cmd) {
+        case IOCTL_READ_DATA:
+            pr_info("IOCTL_READ_DATA command\n");
+
+            // msgs[0].addr  = i2c_client->addr;
+            // msgs[0].flags = I2C_M_RD;
+            // msgs[0].len   = 1;
+            // msgs[0].buf   = &data;
+
+            // ret = i2c_transfer(i2c_client->adapter, msgs, 1);
+            // if (ret < 0) {
+            //     pr_err("Failed to read from I2C device: %d\n", ret);
+            //     return ret;
+            // }
+
+            pr_info("Data read from I2C device: 0x%x\n", data);
+
+            if (copy_to_user((char __user *)arg, &i2c_data, sizeof(i2c_data))) {
+                pr_err("Failed to copy data to user space\n");
+                return -EFAULT;
+            }
+
+            // Check if the data is not zero and notify the user space application
+            //  if (data != 0 && user_pid > 0) {
+            //     pr_info("Sending signal to user space process PID: %d\n", user_pid);
+            //     int ret = kill_pid(find_vpid(user_pid), DATA_AVAILABLE_SIGNAL, 1);
+            //     if (ret < 0) {
+            //         pr_err("Failed to send signal to user space: %d\n", ret);
+            //     }
+            // }
+            return 0;
+
+        case IOCTL_WRITE_DATA:
+            pr_info("IOCTL_WRITE_DATA command\n");
+
+            if (copy_from_user(&data, (char __user *)arg, sizeof(data))) {
+                pr_err("Failed to copy data from user space\n");
+                return -EFAULT;
+            }
+
+            pr_info("Data to be written to I2C device: 0x%x\n", data);
+
+            msgs[0].addr  = i2c_client->addr;
+            msgs[0].flags = 0;
+            msgs[0].len   = 1;
+            msgs[0].buf   = &data;
+
+            ret = i2c_transfer(i2c_client->adapter, msgs, 1);
+            if (ret < 0) {
+                pr_err("Failed to write to I2C device: %d\n", ret);
+                return ret;
+            }
+            return 0;
+
+        default:
+            pr_err("Invalid IOCTL command\n");
+            return -EINVAL;
+    }
+}
+
+static int lvipanel_open(struct inode *inode, struct file *file) {
+    user_pid = current->pid;
+    pr_info("lvipanel: Stored user PID: %d\n", user_pid);
+    return 0;
+}
+
+static int lvipanel_release(struct inode *inode, struct file *file) {
+    pr_info("lvipanel device released\n");
+    user_pid = 0;  // Reset the PID on release
+    return 0;
+}
+
+static struct file_operations fops = {
+    .owner = THIS_MODULE,
+    .open = lvipanel_open,
+    .release = lvipanel_release,
+    .unlocked_ioctl = lvipanel_ioctl,
+};
+
+static int lvipanel_probe(struct i2c_client *client, const struct i2c_device_id *id) {
+    struct device_node *np = client->dev.of_node;
+    int ret;
+
+    pr_info("Probing lvipanel driver\n");
+
+    if (!np) {
+        pr_err("Device tree node not found\n");
+        return -EINVAL;
+    }
+
+    i2c_client = client;
+
+    /* Register the character device */
+    major = register_chrdev(0, DEVICE_NAME, &fops);
+    if (major < 0) {
+        pr_err("Failed to register character device\n");
+        return major;
+    }
+
+    pr_info("lvipanel device registered with major number %d\n", major);
+
+    /* Create the device class */
+    lvipanel_class = class_create(THIS_MODULE, DEVICE_NAME);
+    if (IS_ERR(lvipanel_class)) {
+        unregister_chrdev(major, DEVICE_NAME);
+        return PTR_ERR(lvipanel_class);
+    }
+
+    /* Create the device node */
+    if (device_create(lvipanel_class, NULL, MKDEV(major, 0), NULL, DEVICE_NAME) == NULL) {
+        class_destroy(lvipanel_class);
+        unregister_chrdev(major, DEVICE_NAME);
+        return -1;
+    }
+
+    // Start the polling thread
+    keep_polling = true;
+    polling_thread = kthread_run(lvipanel_polling_thread, NULL, "lvipanel_polling");
+    if (IS_ERR(polling_thread)) {
+        pr_err("Failed to create polling thread\n");
+        device_destroy(lvipanel_class, MKDEV(major, 0));
+        class_destroy(lvipanel_class);
+        unregister_chrdev(major, DEVICE_NAME);
+        return PTR_ERR(polling_thread);
+    }
+
+    pr_info("I2C client successfully initialized: addr=0x%x\n", client->addr);
+    return 0;
+}
+
+static int lvipanel_remove(struct i2c_client *client) {
+    pr_info("Removing lvipanel driver\n");
+
+    // Stop the polling thread
+    keep_polling = false;
+    if (polling_thread) {
+        kthread_stop(polling_thread);
+    }
+
+    device_destroy(lvipanel_class, MKDEV(major, 0));
+    class_destroy(lvipanel_class);
+    unregister_chrdev(major, DEVICE_NAME);
+
+    pr_info("lvipanel driver removed\n");
+    return 0;
+}
+
+static struct i2c_device_id lvipanel_id[] = {
+    { DEVICE_NAME, 0 },
+    {}
+};
+MODULE_DEVICE_TABLE(i2c, lvipanel_id);
 
 static struct i2c_driver lvipanel_driver = {
     .driver = {
         .name = DEVICE_NAME,
-        .of_match_table = of_match_ptr(lvipanel_of_match),
+        .owner = THIS_MODULE,
+        .of_match_table = lvipanel_of_match,
     },
     .probe = lvipanel_probe,
     .remove = lvipanel_remove,
-    .shutdown = lvipanel_shutdown,
+    .id_table = lvipanel_id,
 };
 
-module_i2c_driver(lvipanel_driver);
+module_i2c_driver(lvipanel_driver);  // Registers and unregisters the driver automatically
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Max Borglowe");
+MODULE_DESCRIPTION("I2C Kernel Module using i2c_msg named lvipanel with DT support");
