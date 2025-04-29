@@ -22,9 +22,46 @@
 
 #include "lcdifv3-regs.h"
 
-#define DRIVER_NAME "imx-lcdifv3"
+#include <linux/kernel.h>
+#include <linux/fs.h>
+#include <linux/uaccess.h>
+#include <linux/ioctl.h>
+#include <linux/device.h>
+#include <linux/miscdevice.h>
 
-#define LCDIF2_BASE 0x32E90000
+#define DRIVER_NAME "imx-lcdifv3"
+#define DEVICE_NAME "lvicolor"
+
+static int lcdifv3_major;
+static struct class *lcdifv3_class;
+
+struct lcdifv3_csc_params {
+	int brightness;
+	int contrast;
+	int saturation;
+	int r_gain;
+	int g_gain;
+	int b_gain;
+};
+
+#define LCDIFV3_IOC_MAGIC 'L'
+#define LCDIFV3_IOC_SET_CSC                                                    \
+	_IOW(LCDIFV3_IOC_MAGIC, 1, struct lcdifv3_csc_params)
+
+#define LCDIF2_BASE_ADDR 0x32e90000
+
+static uint8_t lcdifv3_ioctl_is_created = 0;
+
+int color_matrix[3][4] = {
+	{ 256, 0, 0, 0 }, // R
+	{ 0, 256, 0, 0 }, // G
+	{ 0, 0, 256, 0 }, // B
+};
+
+static int imx_lcdifv3_ioctl_create(void);
+void build_color_matrix(int matrix[3][4], int brightness, int contrast,
+			int saturation, int r_gain, int g_gain, int b_gain);
+void lcdifv3_config_rgb_to_ycbcr(void __iomem *base, int matrix[3][4]);
 
 struct lcdifv3_soc {
 	struct device *dev;
@@ -33,6 +70,8 @@ struct lcdifv3_soc {
 	void __iomem *base;
 	struct regmap *gpr;
 	atomic_t rpm_suspended;
+
+	struct miscdevice misc; /* add this line */
 
 	struct clk *clk_pix;
 	struct clk *clk_disp_axi;
@@ -679,6 +718,92 @@ static void imx_lcdifv3_of_parse_thres(struct lcdifv3_soc *lcdifv3)
 	}
 }
 
+static long lcdifv3_ioctl(struct file *file, unsigned int cmd,
+			  unsigned long arg)
+{
+	printk(KERN_INFO "lcdifv3_ioctl: called with cmd=0x%x\n", cmd);
+
+	struct lcdifv3_csc_params csc_params;
+	struct lcdifv3_soc *lcdifv3 = file->private_data;
+	int ret = 0;
+
+	// Print pointers properly
+	printk(KERN_INFO "lcdifv3_ioctl: lcdifv3=%px, lcdifv3->base=%px\n",
+	       lcdifv3, lcdifv3 ? lcdifv3->base : NULL);
+
+	switch (cmd) {
+	case LCDIFV3_IOC_SET_CSC:
+		printk(KERN_INFO
+		       "lcdifv3_ioctl: LCDIFV3_IOC_SET_CSC received\n");
+
+		if (copy_from_user(&csc_params,
+				   (struct lcdifv3_csc_params *)arg,
+				   sizeof(struct lcdifv3_csc_params))) {
+			printk(KERN_ERR
+			       "lcdifv3_ioctl: copy_from_user failed\n");
+			ret = -EFAULT;
+			break;
+		}
+
+		build_color_matrix(color_matrix, csc_params.brightness,
+				   csc_params.contrast, csc_params.saturation,
+				   csc_params.r_gain, csc_params.g_gain,
+				   csc_params.b_gain);
+		printk(KERN_INFO "lcdifv3_ioctl: Color matrix calculated.\n");
+
+		lcdifv3_config_rgb_to_ycbcr(lcdifv3->base, color_matrix);
+		printk(KERN_INFO "lcdifv3_ioctl: CSC registers configured.\n");
+
+		break;
+
+	default:
+		printk(KERN_WARNING
+		       "lcdifv3_ioctl: Unknown ioctl command: 0x%x\n",
+		       cmd);
+		ret = -ENOTTY;
+		break;
+	}
+	return ret;
+}
+
+static int lcdifv3_open(struct inode *inode, struct file *file)
+{
+	struct miscdevice *misc = file->private_data;
+	struct lcdifv3_soc *lcdifv3;
+
+	/* miscdevice is embedded in lcdifv3_soc */
+	lcdifv3 = container_of(misc, struct lcdifv3_soc, misc);
+	if (!lcdifv3) {
+		printk(KERN_ERR "lcdifv3_open: no context\n");
+		return -ENODEV;
+	}
+
+	/* now stash the real context pointer for ioctl() */
+	file->private_data = lcdifv3;
+
+	printk(KERN_INFO "lcdifv3_open: got base=%px\n", lcdifv3->base);
+	return 0;
+}
+
+static int lcdifv3_release(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+// static int lcdifv3_remove(struct inode *inode, struct file *file)
+// {
+// 	pr_info("lcdifv3: ioctl remove call\n");
+
+// 		return 0;
+// }
+
+static struct file_operations fops = {
+	.owner = THIS_MODULE,
+	.open = lcdifv3_open,
+	.release = lcdifv3_release,
+	.unlocked_ioctl = lcdifv3_ioctl,
+};
+
 static int imx_lcdifv3_probe(struct platform_device *pdev)
 {
 	int ret;
@@ -760,6 +885,20 @@ static int imx_lcdifv3_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, lcdifv3);
 
+	if (!of_device_is_compatible(np, "fsl,imx8mp-lcdif2"))
+		goto skip_ioctl;
+
+	lcdifv3->misc.minor = MISC_DYNAMIC_MINOR;
+	lcdifv3->misc.name = DEVICE_NAME; // "/dev/lvicolor"
+	lcdifv3->misc.fops = &fops;
+	lcdifv3->misc.parent = &pdev->dev;
+
+	ret = misc_register(&lcdifv3->misc);
+	// if (ret)
+	// dev_warn(...);
+
+skip_ioctl:
+
 	if (soc_pdata->hdmimix) {
 		ret = hdmimix_lcdif3_setup(lcdifv3);
 		if (ret < 0) {
@@ -779,6 +918,23 @@ static int imx_lcdifv3_probe(struct platform_device *pdev)
 
 static int imx_lcdifv3_remove(struct platform_device *pdev)
 {
+	printk("lcdifv3: remove call\n");
+
+	if (lcdifv3_ioctl_is_created) {
+		// Cleanup: Destroy device and class, unregister char device
+		device_destroy(lcdifv3_class, MKDEV(lcdifv3_major, 0));
+		class_destroy(lcdifv3_class);
+		unregister_chrdev(lcdifv3_major, DEVICE_NAME);
+
+		lcdifv3_ioctl_is_created = 0;
+	}
+
+	struct lcdifv3_soc *lcdifv3 = platform_get_drvdata(pdev);
+
+	/* undo misc so no leaks */
+	if (lcdifv3->misc.name)
+		misc_deregister(&lcdifv3->misc);
+
 	pm_runtime_disable(&pdev->dev);
 
 	return 0;
@@ -798,22 +954,37 @@ static int imx_lcdifv3_remove(struct platform_device *pdev)
 #define CONTRAST_TO_FP(x) ((x) * 2) // Scale 0-128-255 to 0-256-510 fixed point
 #define SATURATION_TO_FP(x)                                                    \
 	((x) * 2) // Scale 0-128-255 to 0-256-510 fixed point
+#define GAIN_TO_FP(x) ((x) * 2) // Scale 0-128-255 to 0-256-510 fixed point
 
-int color_matrix[3][4] = {
-	{ 256, 0, 0, 0 }, // R
-	{ 0, 256, 0, 0 }, // G
-	{ 0, 0, 256, 0 }, // B
-};
-
+/**
+ * build_color_matrix - Build a color correction matrix with RGB gains
+ * @matrix: 3x4 transformation matrix to fill
+ * @brightness: Brightness adjustment [0-255], 128 is neutral
+ * @contrast: Contrast adjustment [0-255], 128 is neutral (1.0x)
+ * @saturation: Saturation adjustment [0-255], 128 is neutral (1.0x)
+ * @r_gain: Red gain adjustment [0-255], 128 is neutral (1.0x)
+ * @g_gain: Green gain adjustment [0-255], 128 is neutral (1.0x)
+ * @b_gain: Blue gain adjustment [0-255], 128 is neutral (1.0x)
+ *
+ * This function builds a color correction matrix for adjusting brightness,
+ * contrast, saturation and individual RGB channel gains.
+ */
 void build_color_matrix(int matrix[3][4], int brightness, int contrast,
-			int saturation)
+			int saturation, int r_gain, int g_gain, int b_gain)
 {
+	printk("lcdifv3_build_color_matrix: setting color matrix\n");
 	// Convert parameters to fixed-point representation (all integer math)
 	int b_fp = brightness - 128; // -128 to 127
 	int c_fp = CONTRAST_TO_FP(
 		contrast); // 0 to 510 (0.0 to 2.0 in fixed point)
 	int s_fp = SATURATION_TO_FP(
 		saturation); // 0 to 510 (0.0 to 2.0 in fixed point)
+	int r_gain_fp =
+		GAIN_TO_FP(r_gain); // 0 to 510 (0.0 to 2.0 in fixed point)
+	int g_gain_fp =
+		GAIN_TO_FP(g_gain); // 0 to 510 (0.0 to 2.0 in fixed point)
+	int b_gain_fp =
+		GAIN_TO_FP(b_gain); // 0 to 510 (0.0 to 2.0 in fixed point)
 
 	// Compute inverse saturation (1.0 - saturation) in fixed point
 	int inv_s_fp = 256 - s_fp; // 256 = 1.0 in fixed point
@@ -829,23 +1000,26 @@ void build_color_matrix(int matrix[3][4], int brightness, int contrast,
 	// Compute brightness offset term
 	int b_offset = b_fp - half_contrast_offset;
 
-	// RGB transform rows
+	// RGB transform rows with RGB gains applied
 	// R row
-	matrix[0][0] = FP_MUL(c_fp, (rw + s_fp)); // R←R
+	matrix[0][0] =
+		FP_MUL(FP_MUL(c_fp, (rw + s_fp)), r_gain_fp); // R←R with gain
 	matrix[0][1] = FP_MUL(c_fp, gw); // R←G
 	matrix[0][2] = FP_MUL(c_fp, bw); // R←B
 	matrix[0][3] = b_offset; // R offset
 
 	// G row
 	matrix[1][0] = FP_MUL(c_fp, rw); // G←R
-	matrix[1][1] = FP_MUL(c_fp, (gw + s_fp)); // G←G
+	matrix[1][1] =
+		FP_MUL(FP_MUL(c_fp, (gw + s_fp)), g_gain_fp); // G←G with gain
 	matrix[1][2] = FP_MUL(c_fp, bw); // G←B
 	matrix[1][3] = b_offset; // G offset
 
 	// B row
 	matrix[2][0] = FP_MUL(c_fp, rw); // B←R
 	matrix[2][1] = FP_MUL(c_fp, gw); // B←G
-	matrix[2][2] = FP_MUL(c_fp, (bw + s_fp)); // B←B
+	matrix[2][2] =
+		FP_MUL(FP_MUL(c_fp, (bw + s_fp)), b_gain_fp); // B←B with gain
 	matrix[2][3] = b_offset; // B offset
 }
 
@@ -887,56 +1061,9 @@ void lcdifv3_config_rgb_to_ycbcr(void __iomem *base, int matrix[3][4])
 	writel(v, base + LCDIFV3_CSC0_COEF5);
 
 	mb();
+
+	printk("lcdifv3: configuring coeff registers with RGB-YCbCr values.\n");
 }
-
-// #define FP8(x) ((int32_t)((x) * 256.0 + ((x) > 0 ? 0.5 : -0.5)))
-
-// /* BT.601 full-range RGB→Y′CbCr floats: */
-// static const float bt601[3][4] = {
-// 	/*    R        G        B     Offset */
-// 	{ 1.0f, 0.0f, 0.0f, 0.0f }, // R = R
-// 	{ 0.0f, 1.0f, 0.0f, 0.0f }, // G = G
-// 	{ 0.0f, 0.0f, 1.0f, 0.0f }, // B = B
-// };
-
-// void lcdifv3_config_rgb_to_ycbcr(void __iomem *base)
-// {
-// 	uint32_t v;
-
-// 	/* 1) Turn OFF bypass so CSC will run */
-// 	writel(0x4, base + LCDIFV3_CSC0_CTRL);
-// 	mb();
-
-// 	/* 2) Y row → COEF0/1:  A1 (R), A2 (G), A3 (B), D1 */
-// 	v = CSC0_COEF0_A2(FP8(bt601[0][1])) /* A2 = G→Y */
-// 	    | CSC0_COEF0_A1(FP8(bt601[0][0])); /* A1 = R→Y */
-// 	writel(v, base + LCDIFV3_CSC0_COEF0);
-
-// 	v = CSC0_COEF1_B1(FP8(bt601[1][0])) /* B1 = R→U */
-// 	    | CSC0_COEF1_A3(FP8(bt601[0][2])); /* A3 = B→Y */
-// 	writel(v, base + LCDIFV3_CSC0_COEF1);
-
-// 	/* 3) U row → COEF2:  B2 (G), B3 (B) */
-// 	v = CSC0_COEF2_B2(FP8(bt601[1][1])) /* B2 = G→U */
-// 	    | CSC0_COEF2_B3(FP8(bt601[1][2])); /* B3 = B→U */
-// 	writel(v, base + LCDIFV3_CSC0_COEF2);
-
-// 	/* 4) V row → COEF3/4:  C1 (R), C2 (G), C3 (B), D1 already done */
-// 	v = CSC0_COEF3_C2(FP8(bt601[2][1])) /* C2 = G→V */
-// 	    | CSC0_COEF3_C1(FP8(bt601[2][0])); /* C1 = R→V */
-// 	writel(v, base + LCDIFV3_CSC0_COEF3);
-
-// 	v = CSC0_COEF4_C3(FP8(bt601[2][2])) /* C3 = B→V */
-// 	    | CSC0_COEF4_D1(FP8(bt601[0][3])); /* D1 = Y offset */
-// 	writel(v, base + LCDIFV3_CSC0_COEF4);
-
-// 	/* 5) Offsets D2 (U), D3 (V) → COEF5 */
-// 	v = CSC0_COEF5_D2(FP8(bt601[1][3])) /* D2 = U offset */
-// 	    | CSC0_COEF5_D3(FP8(bt601[2][3])); /* D3 = V offset */
-// 	writel(v, base + LCDIFV3_CSC0_COEF5);
-
-// 	mb();
-// }
 
 static int imx_lcdifv3_runtime_suspend(struct device *dev)
 {
@@ -950,6 +1077,39 @@ static int imx_lcdifv3_runtime_suspend(struct device *dev)
 	release_bus_freq(BUS_FREQ_HIGH);
 
 	return 0;
+}
+
+static int imx_lcdifv3_ioctl_create(void)
+{
+	int ret;
+
+	if (lcdifv3_ioctl_is_created == 0) {
+		//register character device
+		lcdifv3_major = register_chrdev(0, DEVICE_NAME, &fops);
+		if (lcdifv3_major < 0) {
+			pr_err("Failed to register character device\n");
+			ret = lcdifv3_major;
+		}
+
+		// Create the device class
+		lcdifv3_class = class_create(THIS_MODULE, DEVICE_NAME);
+		if (IS_ERR(lcdifv3_class)) {
+			unregister_chrdev(lcdifv3_major, DEVICE_NAME);
+			ret = PTR_ERR(lcdifv3_class);
+		}
+
+		// Create the device node
+		if (device_create(lcdifv3_class, NULL, MKDEV(lcdifv3_major, 0),
+				  NULL, DEVICE_NAME) == NULL) {
+			class_destroy(lcdifv3_class);
+			unregister_chrdev(lcdifv3_major, DEVICE_NAME);
+			ret = -1;
+		}
+
+		lcdifv3_ioctl_is_created = 1;
+	}
+
+	return ret;
 }
 
 static int imx_lcdifv3_runtime_resume(struct device *dev)
@@ -976,7 +1136,13 @@ static int imx_lcdifv3_runtime_resume(struct device *dev)
 	/* clear sw_reset */
 	writel(CTRL_SW_RESET, lcdifv3->base + LCDIFV3_CTRL_CLR);
 
-	build_color_matrix(color_matrix, 200, 200, 200);
+	imx_lcdifv3_ioctl_create();
+
+	// Print pointers properly
+	printk(KERN_INFO "lcdifv3_ioctl: lcdifv3=%px, lcdifv3->base=%px\n",
+	       lcdifv3, lcdifv3 ? lcdifv3->base : NULL);
+
+	build_color_matrix(color_matrix, 200, 200, 200, 128, 128, 128);
 	lcdifv3_config_rgb_to_ycbcr(lcdifv3->base, color_matrix);
 	dev_info(lcdifv3->dev, "CSC0_CTRL after resume = 0x%08x\n",
 		 readl(lcdifv3->base + LCDIFV3_CSC0_CTRL));
