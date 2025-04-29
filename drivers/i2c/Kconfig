@@ -36,6 +36,23 @@ config ACPI_I2C_OPREGION
 
 if I2C
 
+config I2C_LVIBATTERY
+    tristate "LVIBATTERY I2C driver"
+    depends on I2C
+    help
+      This driver supports the LVIBATTERY.
+
+
+config CAT5157_DPOT
+	tristate "CAT5157 digital potentiometer driver"
+	depends on I2C
+	help
+		This driver supports the CAT5157 digital potentiometer.
+		It allows for controlling the resistance (from a minimum of 390 ohms
+		to a maximum of 100kohm) via I2C based on settings provided
+		in the device tree (using properties such as resistance-default,
+		resistance-min, and resistance-max).
+
 config I2C_LVICONFIG
     tristate "LVICONFIG I2C driver"
     depends on I2C

@@ -24,6 +24,8 @@
 
 #define DRIVER_NAME "imx-lcdifv3"
 
+#define LCDIF2_BASE 0x32E90000
+
 struct lcdifv3_soc {
 	struct device *dev;
 
@@ -55,27 +57,44 @@ struct lcdifv3_platform_reg {
 
 static struct lcdifv3_platform_reg client_reg[] = {
 	{
-		.pdata = { },
-		.name  = "imx-lcdifv3-crtc",
+		.pdata = {},
+		.name = "imx-lcdifv3-crtc",
 	},
 };
 
 static struct lcdifv3_soc_pdata imx8mp_lcdif1_pdata = {
 	.hsync_invert = false,
 	.vsync_invert = false,
-	.de_invert    = false,
+	.de_invert = false,
+	.hdmimix = false,
 };
 
 static struct lcdifv3_soc_pdata imx8mp_lcdif2_pdata = {
 	.hsync_invert = false,
 	.vsync_invert = false,
-	.de_invert    = false,
+	.de_invert = true,
+	.hdmimix = false,
 };
 
+static struct lcdifv3_soc_pdata imx8mp_lcdif3_pdata = {
+	.hsync_invert = false,
+	.vsync_invert = false,
+	.de_invert = false,
+	.hdmimix = true,
+};
 static const struct of_device_id imx_lcdifv3_dt_ids[] = {
-	{ .compatible = "fsl,imx93-lcdif", },
-	{ .compatible = "fsl,imx8mp-lcdif1", .data = &imx8mp_lcdif1_pdata, },
-	{ .compatible = "fsl,imx8mp-lcdif2", .data = &imx8mp_lcdif2_pdata, },
+	{
+		.compatible = "fsl,imx8mp-lcdif1",
+		.data = &imx8mp_lcdif1_pdata,
+	},
+	{
+		.compatible = "fsl,imx8mp-lcdif2",
+		.data = &imx8mp_lcdif2_pdata,
+	},
+	{
+		.compatible = "fsl,imx8mp-lcdif3",
+		.data = &imx8mp_lcdif3_pdata,
+	},
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, imx_lcdifv3_dt_ids);
@@ -134,12 +153,12 @@ static void lcdifv3_enable_plane_panic(struct lcdifv3_soc *lcdifv3)
 	 * is 8KB = 512 * 128bit).
 	 * threshold = n * 128bit (n: 0 ~ 511)
 	 */
-	thres_low  = DIV_ROUND_UP(511 * lcdifv3->thres_low_mul,
-			lcdifv3->thres_low_div);
+	thres_low = DIV_ROUND_UP(511 * lcdifv3->thres_low_mul,
+				 lcdifv3->thres_low_div);
 	thres_high = DIV_ROUND_UP(511 * lcdifv3->thres_high_mul,
-			lcdifv3->thres_high_div);
+				  lcdifv3->thres_high_div);
 
-	panic_thres = PANIC0_THRES_PANIC_THRES_LOW(thres_low)	|
+	panic_thres = PANIC0_THRES_PANIC_THRES_LOW(thres_low) |
 		      PANIC0_THRES_PANIC_THRES_HIGH(thres_high);
 
 	writel(panic_thres, lcdifv3->base + LCDIFV3_PANIC0_THRES);
@@ -170,11 +189,9 @@ void lcdifv3_vblank_irq_enable(struct lcdifv3_soc *lcdifv3)
 	int_enable_d0 |= INT_STATUS_D0_VS_BLANK;
 
 	/* W1C */
-	writel(INT_STATUS_D0_VS_BLANK,
-	       lcdifv3->base + LCDIFV3_INT_STATUS_D0);
+	writel(INT_STATUS_D0_VS_BLANK, lcdifv3->base + LCDIFV3_INT_STATUS_D0);
 	/* enable */
-	writel(int_enable_d0,
-	       lcdifv3->base + LCDIFV3_INT_ENABLE_D0);
+	writel(int_enable_d0, lcdifv3->base + LCDIFV3_INT_ENABLE_D0);
 }
 EXPORT_SYMBOL(lcdifv3_vblank_irq_enable);
 
@@ -186,19 +203,16 @@ void lcdifv3_vblank_irq_disable(struct lcdifv3_soc *lcdifv3)
 	int_enable_d0 &= ~INT_STATUS_D0_VS_BLANK;
 
 	/* disable */
-	writel(int_enable_d0,
-	       lcdifv3->base + LCDIFV3_INT_ENABLE_D0);
+	writel(int_enable_d0, lcdifv3->base + LCDIFV3_INT_ENABLE_D0);
 	/* W1C */
-	writel(INT_STATUS_D0_VS_BLANK,
-	       lcdifv3->base + LCDIFV3_INT_STATUS_D0);
+	writel(INT_STATUS_D0_VS_BLANK, lcdifv3->base + LCDIFV3_INT_STATUS_D0);
 }
 EXPORT_SYMBOL(lcdifv3_vblank_irq_disable);
 
 void lcdifv3_vblank_irq_clear(struct lcdifv3_soc *lcdifv3)
 {
 	/* W1C */
-	writel(INT_STATUS_D0_VS_BLANK,
-	       lcdifv3->base + LCDIFV3_INT_STATUS_D0);
+	writel(INT_STATUS_D0_VS_BLANK, lcdifv3->base + LCDIFV3_INT_STATUS_D0);
 }
 EXPORT_SYMBOL(lcdifv3_vblank_irq_clear);
 
@@ -284,7 +298,7 @@ int lcdifv3_set_pix_fmt(struct lcdifv3_soc *lcdifv3, u32 format)
 		return -EINVAL;
 	}
 
-	writel(ctrldescl0_5,  lcdifv3->base + LCDIFV3_CTRLDESCL0_5);
+	writel(ctrldescl0_5, lcdifv3->base + LCDIFV3_CTRLDESCL0_5);
 
 	return 0;
 }
@@ -333,7 +347,8 @@ void lcdifv3_set_fb_addr(struct lcdifv3_soc *lcdifv3, int id, u32 addr)
 }
 EXPORT_SYMBOL(lcdifv3_set_fb_addr);
 
-void lcdifv3_set_pitch(struct lcdifv3_soc *lcdifv3, unsigned int pitch)
+void lcdifv3_set_fb_hcrop(struct lcdifv3_soc *lcdifv3, u32 src_w, u32 pitch,
+			  bool crop)
 {
 	uint32_t ctrldescl0_3 = 0;
 
@@ -360,11 +375,10 @@ void lcdifv3_set_pitch(struct lcdifv3_soc *lcdifv3, unsigned int pitch)
 }
 EXPORT_SYMBOL(lcdifv3_set_pitch);
 
-
 void lcdifv3_set_mode(struct lcdifv3_soc *lcdifv3, struct videomode *vmode)
 {
 	const struct of_device_id *of_id =
-			of_match_device(imx_lcdifv3_dt_ids, lcdifv3->dev);
+		of_match_device(imx_lcdifv3_dt_ids, lcdifv3->dev);
 	const struct lcdifv3_soc_pdata *soc_pdata;
 	u32 disp_size, hsyn_para, vsyn_para, vsyn_hsyn_width, ctrldescl0_1;
 
@@ -501,6 +515,46 @@ void lcdifv3_disable_controller(struct lcdifv3_soc *lcdifv3)
 }
 EXPORT_SYMBOL(lcdifv3_disable_controller);
 
+long lcdifv3_pix_clk_round_rate(struct lcdifv3_soc *lcdifv3, unsigned long rate)
+{
+	if (unlikely(!rate))
+		return -EINVAL;
+
+	return clk_round_rate(lcdifv3->clk_pix, rate);
+}
+EXPORT_SYMBOL(lcdifv3_pix_clk_round_rate);
+
+static int hdmimix_lcdif3_setup(struct lcdifv3_soc *lcdifv3)
+{
+	struct device *dev = lcdifv3->dev;
+	int ret;
+
+	struct clk_bulk_data clocks[] = {
+		{ .id = "mix_apb" },   { .id = "mix_axi" },
+		{ .id = "xtl_24m" },   { .id = "mix_pix" },
+		{ .id = "lcdif_apb" }, { .id = "lcdif_axi" },
+		{ .id = "lcdif_pdi" }, { .id = "lcdif_pix" },
+		{ .id = "lcdif_spu" }, { .id = "noc_hdmi" },
+	};
+
+	/* power up hdmimix lcdif and nor */
+	ret = device_reset(dev);
+	if (ret)
+		dev_warn(dev, "No hdmimix sub reset found\n");
+	if (ret == -EPROBE_DEFER)
+		return ret;
+
+	/* enable lpcg of hdmimix lcdif and nor */
+	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(clocks), clocks);
+	if (ret < 0)
+		return ret;
+	ret = clk_bulk_prepare_enable(ARRAY_SIZE(clocks), clocks);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
 static int platform_remove_device_fn(struct device *dev, void *data)
 {
 	struct platform_device *pdev = to_platform_device(dev);
@@ -528,8 +582,8 @@ static int lcdifv3_add_client_devices(struct lcdifv3_soc *lcdifv3)
 	for (i = 0; i < ARRAY_SIZE(client_reg); i++) {
 		of_node = of_graph_get_port_by_id(dev->of_node, i);
 		if (!of_node) {
-			dev_info(dev, "no port@%d node in %s\n",
-				 i, dev->of_node->full_name);
+			dev_info(dev, "no port@%d node in %s\n", i,
+				 dev->of_node->full_name);
 			continue;
 		}
 		of_node_put(of_node);
@@ -596,28 +650,29 @@ static void imx_lcdifv3_of_parse_thres(struct lcdifv3_soc *lcdifv3)
 	/* default 'thres-low' value:  FIFO * 1/3;
 	 * default 'thres-high' value: FIFO * 2/3.
 	 */
-	lcdifv3->thres_low_mul	= 1;
-	lcdifv3->thres_low_div	= 3;
-	lcdifv3->thres_high_mul	= 2;
-	lcdifv3->thres_high_div	= 3;
+	lcdifv3->thres_low_mul = 1;
+	lcdifv3->thres_low_div = 3;
+	lcdifv3->thres_high_mul = 2;
+	lcdifv3->thres_high_div = 3;
 
 	ret = of_property_read_u32_array(np, "thres-low", thres_low, 2);
 	if (!ret) {
 		/* check the value effectiveness */
 		ret = imx_lcdifv3_check_thres_value(thres_low[0], thres_low[1]);
 		if (!ret) {
-			lcdifv3->thres_low_mul	= thres_low[0];
-			lcdifv3->thres_low_div	= thres_low[1];
+			lcdifv3->thres_low_mul = thres_low[0];
+			lcdifv3->thres_low_div = thres_low[1];
 		}
 	}
 
 	ret = of_property_read_u32_array(np, "thres-high", thres_high, 2);
 	if (!ret) {
 		/* check the value effectiveness */
-		ret = imx_lcdifv3_check_thres_value(thres_high[0], thres_high[1]);
+		ret = imx_lcdifv3_check_thres_value(thres_high[0],
+						    thres_high[1]);
 		if (!ret) {
-			lcdifv3->thres_high_mul	= thres_high[0];
-			lcdifv3->thres_high_div	= thres_high[1];
+			lcdifv3->thres_high_mul = thres_high[0];
+			lcdifv3->thres_high_div = thres_high[1];
 		}
 	}
 }
@@ -699,6 +754,159 @@ static int imx_lcdifv3_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_PM
+
+// BT.601 luma weights as fixed-point values (8-bit fraction)
+#define RW 76 // 0.299 * 256 = ~76
+#define GW 150 // 0.587 * 256 = ~150
+#define BW 29 // 0.114 * 256 = ~29
+
+// Fixed-point multiplication: (a * b) >> 8
+#define FP_MUL(a, b) (((a) * (b)) >> 8)
+
+// Direct conversion for input values to fixed point (no floats)
+#define CONTRAST_TO_FP(x) ((x) * 2) // Scale 0-128-255 to 0-256-510 fixed point
+#define SATURATION_TO_FP(x)                                                    \
+	((x) * 2) // Scale 0-128-255 to 0-256-510 fixed point
+
+int color_matrix[3][4] = {
+	{ 256, 0, 0, 0 }, // R
+	{ 0, 256, 0, 0 }, // G
+	{ 0, 0, 256, 0 }, // B
+};
+
+void build_color_matrix(int matrix[3][4], int brightness, int contrast,
+			int saturation)
+{
+	// Convert parameters to fixed-point representation (all integer math)
+	int b_fp = brightness - 128; // -128 to 127
+	int c_fp = CONTRAST_TO_FP(
+		contrast); // 0 to 510 (0.0 to 2.0 in fixed point)
+	int s_fp = SATURATION_TO_FP(
+		saturation); // 0 to 510 (0.0 to 2.0 in fixed point)
+
+	// Compute inverse saturation (1.0 - saturation) in fixed point
+	int inv_s_fp = 256 - s_fp; // 256 = 1.0 in fixed point
+
+	// Luma weight scale
+	int rw = FP_MUL(RW, inv_s_fp);
+	int gw = FP_MUL(GW, inv_s_fp);
+	int bw = FP_MUL(BW, inv_s_fp);
+
+	// Compute half contrast offset: 0.5 * (contrast - 1.0)
+	int half_contrast_offset = ((c_fp - 256) >> 1);
+
+	// Compute brightness offset term
+	int b_offset = b_fp - half_contrast_offset;
+
+	// RGB transform rows
+	// R row
+	matrix[0][0] = FP_MUL(c_fp, (rw + s_fp)); // R←R
+	matrix[0][1] = FP_MUL(c_fp, gw); // R←G
+	matrix[0][2] = FP_MUL(c_fp, bw); // R←B
+	matrix[0][3] = b_offset; // R offset
+
+	// G row
+	matrix[1][0] = FP_MUL(c_fp, rw); // G←R
+	matrix[1][1] = FP_MUL(c_fp, (gw + s_fp)); // G←G
+	matrix[1][2] = FP_MUL(c_fp, bw); // G←B
+	matrix[1][3] = b_offset; // G offset
+
+	// B row
+	matrix[2][0] = FP_MUL(c_fp, rw); // B←R
+	matrix[2][1] = FP_MUL(c_fp, gw); // B←G
+	matrix[2][2] = FP_MUL(c_fp, (bw + s_fp)); // B←B
+	matrix[2][3] = b_offset; // B offset
+}
+
+// Function to apply the color matrix to the CSC registers
+void lcdifv3_config_rgb_to_ycbcr(void __iomem *base, int matrix[3][4])
+{
+	uint32_t v;
+
+	/* 1) Turn OFF bypass so CSC will run */
+	writel(0x4, base + LCDIFV3_CSC0_CTRL);
+	mb();
+
+	/* 2) Y row → COEF0/1:  A1 (R), A2 (G), A3 (B) */
+	v = CSC0_COEF0_A2(matrix[0][1]) /* A2 = G→Y */
+	    | CSC0_COEF0_A1(matrix[0][0]); /* A1 = R→Y */
+	writel(v, base + LCDIFV3_CSC0_COEF0);
+
+	v = CSC0_COEF1_B1(matrix[1][0]) /* B1 = R→U */
+	    | CSC0_COEF1_A3(matrix[0][2]); /* A3 = B→Y */
+	writel(v, base + LCDIFV3_CSC0_COEF1);
+
+	/* 3) U row → COEF2:  B2 (G), B3 (B) */
+	v = CSC0_COEF2_B2(matrix[1][1]) /* B2 = G→U */
+	    | CSC0_COEF2_B3(matrix[1][2]); /* B3 = B→U */
+	writel(v, base + LCDIFV3_CSC0_COEF2);
+
+	/* 4) V row → COEF3/4:  C1 (R), C2 (G), C3 (B) */
+	v = CSC0_COEF3_C2(matrix[2][1]) /* C2 = G→V */
+	    | CSC0_COEF3_C1(matrix[2][0]); /* C1 = R→V */
+	writel(v, base + LCDIFV3_CSC0_COEF3);
+
+	v = CSC0_COEF4_C3(matrix[2][2]) /* C3 = B→V */
+	    | CSC0_COEF4_D1(matrix[0][3]); /* D1 = Y offset */
+	writel(v, base + LCDIFV3_CSC0_COEF4);
+
+	/* 5) Offsets D2 (U), D3 (V) → COEF5 */
+	v = CSC0_COEF5_D2(matrix[1][3]) /* D2 = U offset */
+	    | CSC0_COEF5_D3(matrix[2][3]); /* D3 = V offset */
+	writel(v, base + LCDIFV3_CSC0_COEF5);
+
+	mb();
+}
+
+// #define FP8(x) ((int32_t)((x) * 256.0 + ((x) > 0 ? 0.5 : -0.5)))
+
+// /* BT.601 full-range RGB→Y′CbCr floats: */
+// static const float bt601[3][4] = {
+// 	/*    R        G        B     Offset */
+// 	{ 1.0f, 0.0f, 0.0f, 0.0f }, // R = R
+// 	{ 0.0f, 1.0f, 0.0f, 0.0f }, // G = G
+// 	{ 0.0f, 0.0f, 1.0f, 0.0f }, // B = B
+// };
+
+// void lcdifv3_config_rgb_to_ycbcr(void __iomem *base)
+// {
+// 	uint32_t v;
+
+// 	/* 1) Turn OFF bypass so CSC will run */
+// 	writel(0x4, base + LCDIFV3_CSC0_CTRL);
+// 	mb();
+
+// 	/* 2) Y row → COEF0/1:  A1 (R), A2 (G), A3 (B), D1 */
+// 	v = CSC0_COEF0_A2(FP8(bt601[0][1])) /* A2 = G→Y */
+// 	    | CSC0_COEF0_A1(FP8(bt601[0][0])); /* A1 = R→Y */
+// 	writel(v, base + LCDIFV3_CSC0_COEF0);
+
+// 	v = CSC0_COEF1_B1(FP8(bt601[1][0])) /* B1 = R→U */
+// 	    | CSC0_COEF1_A3(FP8(bt601[0][2])); /* A3 = B→Y */
+// 	writel(v, base + LCDIFV3_CSC0_COEF1);
+
+// 	/* 3) U row → COEF2:  B2 (G), B3 (B) */
+// 	v = CSC0_COEF2_B2(FP8(bt601[1][1])) /* B2 = G→U */
+// 	    | CSC0_COEF2_B3(FP8(bt601[1][2])); /* B3 = B→U */
+// 	writel(v, base + LCDIFV3_CSC0_COEF2);
+
+// 	/* 4) V row → COEF3/4:  C1 (R), C2 (G), C3 (B), D1 already done */
+// 	v = CSC0_COEF3_C2(FP8(bt601[2][1])) /* C2 = G→V */
+// 	    | CSC0_COEF3_C1(FP8(bt601[2][0])); /* C1 = R→V */
+// 	writel(v, base + LCDIFV3_CSC0_COEF3);
+
+// 	v = CSC0_COEF4_C3(FP8(bt601[2][2])) /* C3 = B→V */
+// 	    | CSC0_COEF4_D1(FP8(bt601[0][3])); /* D1 = Y offset */
+// 	writel(v, base + LCDIFV3_CSC0_COEF4);
+
+// 	/* 5) Offsets D2 (U), D3 (V) → COEF5 */
+// 	v = CSC0_COEF5_D2(FP8(bt601[1][3])) /* D2 = U offset */
+// 	    | CSC0_COEF5_D3(FP8(bt601[2][3])); /* D3 = V offset */
+// 	writel(v, base + LCDIFV3_CSC0_COEF5);
+
+// 	mb();
+// }
+
 static int imx_lcdifv3_runtime_suspend(struct device *dev)
 {
 	struct lcdifv3_soc *lcdifv3 = dev_get_drvdata(dev);
@@ -745,6 +953,11 @@ static int imx_lcdifv3_runtime_resume(struct device *dev)
 	/* clear sw_reset */
 	writel(CTRL_SW_RESET, lcdifv3->base + LCDIFV3_CTRL_CLR);
 
+	build_color_matrix(color_matrix, 200, 200, 200);
+	lcdifv3_config_rgb_to_ycbcr(lcdifv3->base, color_matrix);
+	dev_info(lcdifv3->dev, "CSC0_CTRL after resume = 0x%08x\n",
+		 readl(lcdifv3->base + LCDIFV3_CSC0_CTRL));
+
 	/* enable plane FIFO panic */
 	lcdifv3_enable_plane_panic(lcdifv3);
 
@@ -765,20 +978,19 @@ static int imx_lcdifv3_resume(struct device *dev)
 #endif
 
 static const struct dev_pm_ops imx_lcdifv3_pm_ops = {
-	SET_LATE_SYSTEM_SLEEP_PM_OPS(imx_lcdifv3_suspend,
-				     imx_lcdifv3_resume)
-	SET_RUNTIME_PM_OPS(imx_lcdifv3_runtime_suspend,
-			   imx_lcdifv3_runtime_resume, NULL)
+	SET_LATE_SYSTEM_SLEEP_PM_OPS(imx_lcdifv3_suspend, imx_lcdifv3_resume)
+		SET_RUNTIME_PM_OPS(imx_lcdifv3_runtime_suspend,
+				   imx_lcdifv3_runtime_resume, NULL)
 };
 
 struct platform_driver imx_lcdifv3_driver = {
-	.probe    = imx_lcdifv3_probe,
-	.remove   = imx_lcdifv3_remove,
-	.driver   = {
+	.probe = imx_lcdifv3_probe,
+	.remove = imx_lcdifv3_remove,
+	.driver = {
 		.name = DRIVER_NAME,
 		.of_match_table = imx_lcdifv3_dt_ids,
 		.pm = &imx_lcdifv3_pm_ops,
-	},
+},
 };
 
 module_platform_driver(imx_lcdifv3_driver);

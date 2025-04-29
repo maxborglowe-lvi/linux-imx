@@ -14,6 +14,11 @@
 #include <linux/property.h>
 #include <linux/slab.h>
 #include <linux/timer.h>
+#include <linux/gpio.h>
+#include <linux/time.h>
+#include <linux/of.h>
+#include <linux/of_gpio.h>
+#include <linux/device.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-fwnode.h>
@@ -341,79 +346,79 @@ static void i2c_wr32(struct v4l2_subdev *sd, u16 reg, u32 val)
 static void lvicam_setup(struct v4l2_subdev *sd) {
 	printk("[%s] call", __func__);
 
-//*********************************************
-//Start up sequence
-//*********************************************
-//**************************************************
-//TC358746(A)XBG Software Reset
-//**************************************************
-i2c_wr16(sd, 0x0002, 0x0001);// SYSctl, S/W Reset
-usleep_range(10, 100);
-i2c_wr16(sd, 0x0002, 0x0000);// SYSctl, S/W Reset release
-//**************************************************
-//TC358746(A)XBG PLL,Clock Setting
-//**************************************************
-i2c_wr16(sd, 0x0016, 0x1031);// PLL Control Register 0 (PLL_PRD,PLL_FBD)
-i2c_wr16(sd, 0x0018, 0x0203);// PLL_FRS,PLL_LBWS, PLL oscillation enable
-//delay 1000
-usleep_range(1000, 2000);
-i2c_wr16(sd, 0x0018, 0x0213);// PLL_FRS,PLL_LBWS, PLL clock out enable
-//**************************************************
-//TC358746(A)XBG DPI Input Control
-//**************************************************
-i2c_wr16(sd, 0x0006, 0x0190);// FIFO Control Register
-i2c_wr16(sd, 0x0008, 0x0060);// Data Format setting
-i2c_wr16(sd, 0x0022, 0x0F00);// Word Count
-//**************************************************
-//TC358746XBG MCLK Output
-//**************************************************
-//**************************************************
-//TC358746(A)XBG GPIO2,1 Control (Example)
-//**************************************************
-//**************************************************
-//TC358746(A)XBG D-PHY Setting
-//**************************************************
-i2c_wr16(sd, 0x0140, 0x0000);// D-PHY Clock lane enable
-i2c_wr16(sd, 0x0142, 0x0000);
-i2c_wr16(sd, 0x0144, 0x0000);// D-PHY Data lane0 enable
-i2c_wr16(sd, 0x0146, 0x0000);
-i2c_wr16(sd, 0x0148, 0x0000);// D-PHY Data lane1 enable
-i2c_wr16(sd, 0x014A, 0x0000);
-i2c_wr16(sd, 0x014C, 0x0000);// D-PHY Data lane2 enable
-i2c_wr16(sd, 0x014E, 0x0000);
-i2c_wr16(sd, 0x0150, 0x0000);// D-PHY Data lane3 enable
-i2c_wr16(sd, 0x0152, 0x0000);
-//**************************************************
-//TC358746(A)XBG CSI2-TX PPI Control
-//**************************************************
-i2c_wr16(sd, 0x0210, 0x1B58);// LINEINITCNT
-i2c_wr16(sd, 0x0212, 0x0000);
-i2c_wr16(sd, 0x0214, 0x0005);// LPTXTIMECNT
-i2c_wr16(sd, 0x0216, 0x0000);
-i2c_wr16(sd, 0x0218, 0x2304);// TCLK_HEADERCNT
-i2c_wr16(sd, 0x021A, 0x0000);
-i2c_wr16(sd, 0x0220, 0x0705);// THS_HEADERCNT
-i2c_wr16(sd, 0x0222, 0x0000);
-i2c_wr16(sd, 0x0224, 0x4E20);// TWAKEUPCNT
-i2c_wr16(sd, 0x0226, 0x0000);
-i2c_wr16(sd, 0x022C, 0x0005);// THS_TRAILCNT
-i2c_wr16(sd, 0x022E, 0x0000);
-i2c_wr16(sd, 0x0230, 0x0005);// HSTXVREGCNT
-i2c_wr16(sd, 0x0232, 0x0000);
-i2c_wr16(sd, 0x0234, 0x001F);// HSTXVREGEN enable
-i2c_wr16(sd, 0x0236, 0x0000);
-i2c_wr16(sd, 0x0238, 0x0001);// DSI clock Enable/Disable during LP
-i2c_wr16(sd, 0x023A, 0x0000);
-i2c_wr16(sd, 0x0204, 0x0001);// STARTCNTRL
-i2c_wr16(sd, 0x0206, 0x0000);
-i2c_wr16(sd, 0x0518, 0x0001);// CSI Start
-i2c_wr16(sd, 0x051A, 0x0000);
-//**************************************************
-//Set to HS mode
-//**************************************************
-i2c_wr16(sd, 0x0500, 0x8087);// CSI2 lane setting, CSI2 mode=HS
-i2c_wr16(sd, 0x0502, 0xA300);// bit set
-i2c_wr16(sd, 0x0004, 0x0143);// Configuration Control Register
+	//*********************************************
+	//Start up sequence
+	//*********************************************
+	//**************************************************
+	//TC358746(A)XBG Software Reset
+	//**************************************************
+	i2c_wr16(sd, 0x0002, 0x0001);// SYSctl, S/W Reset
+	usleep_range(10, 100);
+	i2c_wr16(sd, 0x0002, 0x0000);// SYSctl, S/W Reset release
+	//**************************************************
+	//TC358746(A)XBG PLL,Clock Setting
+	//**************************************************
+	i2c_wr16(sd, 0x0016, 0x1031);// PLL Control Register 0 (PLL_PRD,PLL_FBD)
+	i2c_wr16(sd, 0x0018, 0x0203);// PLL_FRS,PLL_LBWS, PLL oscillation enable
+	//delay 1000
+	usleep_range(1000, 2000);
+	i2c_wr16(sd, 0x0018, 0x0213);// PLL_FRS,PLL_LBWS, PLL clock out enable
+	//**************************************************
+	//TC358746(A)XBG DPI Input Control
+	//**************************************************
+	i2c_wr16(sd, 0x0006, 0x0190);// FIFO Control Register
+	i2c_wr16(sd, 0x0008, 0x0060);// Data Format setting
+	i2c_wr16(sd, 0x0022, 0x0F00);// Word Count
+	//**************************************************
+	//TC358746XBG MCLK Output
+	//**************************************************
+	//**************************************************
+	//TC358746(A)XBG GPIO2,1 Control (Example)
+	//**************************************************
+	//**************************************************
+	//TC358746(A)XBG D-PHY Setting
+	//**************************************************
+	i2c_wr16(sd, 0x0140, 0x0000);// D-PHY Clock lane enable
+	i2c_wr16(sd, 0x0142, 0x0000);
+	i2c_wr16(sd, 0x0144, 0x0000);// D-PHY Data lane0 enable
+	i2c_wr16(sd, 0x0146, 0x0000);
+	i2c_wr16(sd, 0x0148, 0x0000);// D-PHY Data lane1 enable
+	i2c_wr16(sd, 0x014A, 0x0000);
+	i2c_wr16(sd, 0x014C, 0x0000);// D-PHY Data lane2 enable
+	i2c_wr16(sd, 0x014E, 0x0000);
+	i2c_wr16(sd, 0x0150, 0x0000);// D-PHY Data lane3 enable
+	i2c_wr16(sd, 0x0152, 0x0000);
+	//**************************************************
+	//TC358746(A)XBG CSI2-TX PPI Control
+	//**************************************************
+	i2c_wr16(sd, 0x0210, 0x1B58);// LINEINITCNT
+	i2c_wr16(sd, 0x0212, 0x0000);
+	i2c_wr16(sd, 0x0214, 0x0005);// LPTXTIMECNT
+	i2c_wr16(sd, 0x0216, 0x0000);
+	i2c_wr16(sd, 0x0218, 0x2304);// TCLK_HEADERCNT
+	i2c_wr16(sd, 0x021A, 0x0000);
+	i2c_wr16(sd, 0x0220, 0x0705);// THS_HEADERCNT
+	i2c_wr16(sd, 0x0222, 0x0000);
+	i2c_wr16(sd, 0x0224, 0x4E20);// TWAKEUPCNT
+	i2c_wr16(sd, 0x0226, 0x0000);
+	i2c_wr16(sd, 0x022C, 0x0005);// THS_TRAILCNT
+	i2c_wr16(sd, 0x022E, 0x0000);
+	i2c_wr16(sd, 0x0230, 0x0005);// HSTXVREGCNT
+	i2c_wr16(sd, 0x0232, 0x0000);
+	i2c_wr16(sd, 0x0234, 0x001F);// HSTXVREGEN enable
+	i2c_wr16(sd, 0x0236, 0x0000);
+	i2c_wr16(sd, 0x0238, 0x0001);// DSI clock Enable/Disable during LP
+	i2c_wr16(sd, 0x023A, 0x0000);
+	i2c_wr16(sd, 0x0204, 0x0001);// STARTCNTRL
+	i2c_wr16(sd, 0x0206, 0x0000);
+	i2c_wr16(sd, 0x0518, 0x0001);// CSI Start
+	i2c_wr16(sd, 0x051A, 0x0000);
+	//**************************************************
+	//Set to HS mode
+	//**************************************************
+	i2c_wr16(sd, 0x0500, 0x8087);// CSI2 lane setting, CSI2 mode=HS
+	i2c_wr16(sd, 0x0502, 0xA300);// bit set
+	i2c_wr16(sd, 0x0004, 0x0143);// Configuration Control Register
 }
 
 /* Ops */
@@ -734,8 +739,8 @@ static int lvicam_probe(struct i2c_client *client)
 
 	v4l2_i2c_subdev_init(&lvicam->sd, client, &lvicam_subdev_ops);
 
-	lvicam->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset",
-						    GPIOD_OUT_LOW);
+	v4l2_err(&lvicam->sd, "Fetching reset gpio\n");
+	lvicam->reset_gpio = devm_gpiod_get(&client->dev, "reset", GPIOD_ASIS);
 	if (IS_ERR(lvicam->reset_gpio)) {
 		printk("[%s] : ERROR 2", __func__);
 
@@ -743,9 +748,13 @@ static int lvicam_probe(struct i2c_client *client)
 		err =  PTR_ERR(lvicam->reset_gpio);
 		goto error_media_entity;
 	}
+	// gpiod_direction_output(lvicam->reset_gpio, 0);
 	msleep(10);
+	
+
 
 	/* Check ID of the connected TC358746 */
+	v4l2_err(&lvicam->sd, "Fetching device\n");
 	if (((i2c_rd16(&lvicam->sd, CHIPID) & CHIPID_CHIPID_MASK) >> 8) != 0x44) {
 		printk("[%s] : ERROR 3", __func__);
 

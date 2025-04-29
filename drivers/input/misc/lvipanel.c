@@ -10,6 +10,9 @@
 #include <linux/signal.h>
 #include <linux/kthread.h>    // For kernel threads
 #include <linux/delay.h>      // For msleep
+#include <linux/reboot.h>
+#include <linux/notifier.h>
+#include "lvipanel_events.h"
 
 #define DEVICE_NAME "lvipanel"
 #define IOCTL_READ_DATA _IOR('i', 1, char)
@@ -37,7 +40,56 @@ static const struct of_device_id lvipanel_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, lvipanel_of_match);
 
-// Polling thread function
+static int lvipanel_write_command(char data) {
+    int ret;
+    struct i2c_msg msgs[1];
+
+    if (!i2c_client || !i2c_client->adapter) {
+        pr_err("I2C client or adapter not initialized\n");
+        return -ENODEV;
+    }
+
+    msgs[0].addr  = i2c_client->addr;
+    msgs[0].flags = 0;
+    msgs[0].len   = 1;
+    msgs[0].buf   = &data;
+
+    ret = i2c_transfer(i2c_client->adapter, msgs, 1);
+    if (ret < 0) {
+        pr_err("Failed to write to I2C device: %d\n", ret);
+        return ret;
+    }
+
+    pr_info("Successfully wrote data to I2C device\n");
+    return 0;
+}
+
+
+static int lvipanel_light_green_flash(void){
+    lvipanel_write_command(SYSTEM_EVENT_LIGHT_GREEN_FLASH);
+    return 0;
+}
+
+static int lvipanel_light_green_solid(void){
+    lvipanel_write_command(SYSTEM_EVENT_LIGHT_GREEN_SOLID);
+    return 0;
+}
+
+static int lvipanel_light_yellow_flash(void){
+    lvipanel_write_command(SYSTEM_EVENT_LIGHT_YELLOW_FLASH);
+    return 0;
+}
+
+static int lvipanel_light_yellow_solid(void){
+    lvipanel_write_command(SYSTEM_EVENT_LIGHT_YELLOW_SOLID);
+    return 0;
+}
+
+static int lvipanel_light_off(void){
+    lvipanel_write_command(SYSTEM_EVENT_LIGHT_OFF);
+    return 0;
+}
+
 static int lvipanel_polling_thread(void *data) {
     struct i2c_msg msgs[1];
     int ret;
@@ -54,9 +106,16 @@ static int lvipanel_polling_thread(void *data) {
         // Perform I2C read
         ret = i2c_transfer(i2c_client->adapter, msgs, 1);
         if (ret < 0) {
-            pr_err("Polling failed to read from I2C device: %d\n", ret);
+            // Handle error (optional)
         } else {
             pr_info("Data read from I2C device: 0x%x\n", i2c_data);
+
+            // Check for PANEL_EVENT_ONOFF_RELEASE and trigger shutdown
+            if (i2c_data == PANEL_EVENT_SYSTEM_SHUTDOWN) {
+                pr_info("PANEL_EVENT_ONOFF_RELEASE detected, initiating orderly shutdown\n");
+                orderly_poweroff(true);  // Initiates shutdown
+                break;
+            }
 
             // Check if data is non-zero and send signal if needed
             if (i2c_data != 0 && user_pid > 0) {
@@ -75,6 +134,26 @@ static int lvipanel_polling_thread(void *data) {
     pr_info("Polling thread stopping\n");
     return 0;
 }
+
+// Function to be called during shutdown
+static int lvipanel_reboot_notifier(struct notifier_block *nb, unsigned long action, void *data) {
+    switch (action) {
+        case SYS_DOWN:
+        case SYS_HALT:
+        case SYS_POWER_OFF:
+            pr_info("System is shutting down. Sending SYSTEM_EVENT_LIGHT_OFF\n");
+            lvipanel_write_command(SYSTEM_EVENT_LIGHT_OFF);  // Send the light off command
+            break;
+        default:
+            break;
+    }
+    return NOTIFY_DONE;
+}
+
+// Declare the notifier block
+static struct notifier_block lvipanel_reboot_nb = {
+    .notifier_call = lvipanel_reboot_notifier,
+};
 
 static long lvipanel_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
     char data;
@@ -144,12 +223,16 @@ static long lvipanel_ioctl(struct file *file, unsigned int cmd, unsigned long ar
 }
 
 static int lvipanel_open(struct inode *inode, struct file *file) {
+    lvipanel_light_green_solid();
+
     user_pid = current->pid;
     pr_info("lvipanel: Stored user PID: %d\n", user_pid);
     return 0;
 }
 
 static int lvipanel_release(struct inode *inode, struct file *file) {
+    lvipanel_light_off();
+
     pr_info("lvipanel device released\n");
     user_pid = 0;  // Reset the PID on release
     return 0;
@@ -163,17 +246,23 @@ static struct file_operations fops = {
 };
 
 static int lvipanel_probe(struct i2c_client *client, const struct i2c_device_id *id) {
+
     struct device_node *np = client->dev.of_node;
-    int ret;
 
-    pr_info("Probing lvipanel driver\n");
-
+    register_reboot_notifier(&lvipanel_reboot_nb);
+    
     if (!np) {
         pr_err("Device tree node not found\n");
         return -EINVAL;
     }
 
+    if (!client->adapter) {
+        pr_err("I2C adapter not available\n");
+        return -EPROBE_DEFER;  // Defer probe until adapter is ready
+    }
+
     i2c_client = client;
+    
 
     /* Register the character device */
     major = register_chrdev(0, DEVICE_NAME, &fops);
@@ -198,6 +287,8 @@ static int lvipanel_probe(struct i2c_client *client, const struct i2c_device_id 
         return -1;
     }
 
+    lvipanel_light_green_solid();
+
     // Start the polling thread
     keep_polling = true;
     polling_thread = kthread_run(lvipanel_polling_thread, NULL, "lvipanel_polling");
@@ -215,6 +306,8 @@ static int lvipanel_probe(struct i2c_client *client, const struct i2c_device_id 
 
 static int lvipanel_remove(struct i2c_client *client) {
     pr_info("Removing lvipanel driver\n");
+
+    unregister_reboot_notifier(&lvipanel_reboot_nb);
 
     // Stop the polling thread
     keep_polling = false;
