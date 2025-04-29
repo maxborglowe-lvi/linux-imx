@@ -1641,4 +1641,9 @@ config GPIO_LVISEESAW
 	help
 	  Used for receiving custom LVI GPIO signals.
 
+config GPIO_LVIGPIO
+	tristate "LVI GPIO driver"
+	help
+	  Used for receiving custom LVI GPIO signals.
+
 endif

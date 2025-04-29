@@ -88,6 +88,7 @@ static void ptn5150_check_state(struct ptn5150_info *info)
 		extcon_set_state_sync(info->edev, EXTCON_USB_HOST, false);
 		gpiod_set_value_cansleep(info->vbus_gpiod, 0);
 		extcon_set_state_sync(info->edev, EXTCON_USB, true);
+		pr_info("PTN5150 detected DFP!\n");
 		if (info->role_sw) {
 			ret = usb_role_switch_set_role(info->role_sw, USB_ROLE_DEVICE);
 			if (ret)
@@ -103,6 +104,8 @@ static void ptn5150_check_state(struct ptn5150_info *info)
 			gpiod_set_value_cansleep(info->vbus_gpiod, 1);
 
 		extcon_set_state_sync(info->edev, EXTCON_USB_HOST, true);
+		pr_info("PTN5150 detected UFP!\n");
+
 		if (info->role_sw) {
 			ret = usb_role_switch_set_role(info->role_sw, USB_ROLE_HOST);
 			if (ret)

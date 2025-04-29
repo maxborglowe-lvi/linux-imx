@@ -3,6 +3,7 @@
 # Makefile for misc devices that really don't fit anywhere else.
 #
 
+# obj-$(CONFIG_CAT5157_DPOT) += cat5157_dpot.o
 obj-$(CONFIG_M24C02)		+= m24c02.o
 obj-$(CONFIG_IBM_ASM)		+= ibmasm/
 obj-$(CONFIG_IBMVMC)		+= ibmvmc.o

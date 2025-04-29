@@ -13,39 +13,6 @@
 		stdout-path = &uart1;
 	};
 
-	// gpio-keys {
-	// 	compatible = "gpio-keys";
-	// 	status = "okay";
-
-	// 	back {
-	// 		label = "Back";
-	// 		linux,code = <KEY_BACK>;
-	// 		gpios = <&pca6408_1 7 GPIO_ACTIVE_LOW>;
-	// 		wakeup-source;
-	// 	};
-
-	// 	up {
-	// 		label = "Up";
-	// 		linux,code = <KEY_UP>;
-	// 		gpios = <&pca6408_1 5 GPIO_ACTIVE_LOW>;
-	// 		wakeup-source;
-	// 	};
-
-	// 	home {
-	// 		label = "Home";
-	// 		linux,code = <KEY_HOME>;
-	// 		gpios = <&pca6408_1 4 GPIO_ACTIVE_LOW>;
-	// 		wakeup-source;
-	// 	};
-
-	// 	down {
-	// 		label = "Down";
-	// 		linux,code = <KEY_DOWN>;
-	// 		gpios = <&pca6408_1 6 GPIO_ACTIVE_LOW>;
-	// 		wakeup-source;
-	// 	};
-	// };
-
 	gpio-leds {
 		compatible = "gpio-leds";
 		pinctrl-names = "default";
@@ -89,7 +56,7 @@
 
 	backlight: backlight {
 		compatible = "pwm-backlight";
-		pwms = <&pwm1 0 1000000>;
+		pwms = <&pwm2 0 1000000>;
 		status = "okay";
 
 		brightness-levels = < 0  1  2  3  4  5  6  7  8  9
@@ -106,35 +73,30 @@
 		default-brightness-level = <80>;
 	};
 
-	lvipwm: lvipwm {
-		compatible = "lvipwm";
+	panel: edp-panel {
 		status = "okay";
-		label = "lvipwm";
-		pwms = <&pwm2 0 255>;
-	};
-
-	panel {
-		compatible = "sgd,gktw70sdae4se", "panel-lvds";
+		compatible = "panel-lvds";
+		data-mapping = "vesa-24";
+		width-mm = <383>;
+		height-mm = <215>;
 		backlight = <&backlight>;
-		width-mm = <153>;
-		height-mm = <87>;
-		label = "gktw70sdae4se";
-		data-mapping = "jeida-24";
-		status = "okay";
 
+
+		/* Documentation / devicetree / bindings / video / display-timing.txt */
 		panel-timing {
-			clock-frequency = <33000000>;
-			hactive = <800>;
-			vactive = <480>;
-			hback-porch = <40>;
-			hfront-porch = <40>;
-			vback-porch = <29>;
-			vfront-porch = <13>;
-			hsync-len = <48>;
-			vsync-len = <3>;
-			hsync-active = <0>;
-			vsync-active = <0>;
-			de-active = <1>;
+			clock-frequency = <148500000>;  
+            hactive = <1920>;
+            vactive = <1080>;
+            hback-porch = <148>;
+            hfront-porch = <88>;
+            vback-porch = <36>;
+            vfront-porch = <4>;
+            hsync-len = <44>;
+            vsync-len = <5>;
+            hsync-active = <0>;
+            vsync-active = <0>;
+            de-active = <1>;
+			// interlaced = <1>;
 		};
 
 		port {
@@ -189,58 +151,60 @@
 	status = "okay";
 };
 
-// &eqos {
-// 	mdio {
-// 		ethphy1: ethernet-phy@1 {
-// 			compatible = "ethernet-phy-ieee802.3-c22";
-// 			reg = <1>;
-// 			at803x,eee-disabled;
-// 			eee-broken-1000t;
-// 			reset-gpios = <&pca6408_2 0 GPIO_ACTIVE_LOW>;
-// 			reset-assert-us = <10000>;
-// 			reset-deassert-us = <20000>;
-// 			vddio-supply = <&vddio1>;
 
-// 			vddio1: vddio-regulator {
-// 				regulator-min-microvolt = <1800000>;
-// 				regulator-max-microvolt = <1800000>;
-// 			};
-// 		};
-// 	};
-// };
 
-// &fec {
-// 	pinctrl-names = "default";
-// 	pinctrl-0 = <&pinctrl_fec>;
-// 	phy-mode = "rgmii";
-// 	phy-handle = <&ethphy1>;
-// 	status = "okay";
-// };
+&eqos {
+	mdio {
+		ethphy1: ethernet-phy@1 {
+			compatible = "ethernet-phy-ieee802.3-c22";
+			reg = <1>;
+			at803x,eee-disabled;
+			eee-broken-1000t;
+			reset-gpios = <&pca6416 11 GPIO_ACTIVE_LOW>;
+			reset-assert-us = <10000>;
+			reset-deassert-us = <20000>;
+			vddio-supply = <&vddio1>;
 
-&flexspi {
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_flexspi0>;
-	status = "okay";
-
-/*
-	flash@0 {
-		compatible = "jedec,spi-nor,mt25";
-		reg = <0>;
-		spi-max-frequency = <54000000>;
-		#address-cells = <1>;
-		#size-cells = <1>;
-	};
-	*/
-
-	spidev@0 {
-		compatible = "jedec,spi-nor","micron,mt25", "spidev";
-		reg = <0>;
-		spi-max-frequency = <54000000>;
+			vddio1: vddio-regulator {
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+		};
 	};
 };
 
+&fec {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_fec>;
+	phy-mode = "rgmii";
+	phy-handle = <&ethphy1>;
+	status = "okay";
+};
+
+// &flexspi {
+// 	pinctrl-names = "default";
+// 	pinctrl-0 = <&pinctrl_flexspi0>;
+// 	status = "okay";
+
+// /*
+// 	flash@0 {
+// 		compatible = "jedec,spi-nor,mt25";
+// 		reg = <0>;
+// 		spi-max-frequency = <54000000>;
+// 		#address-cells = <1>;
+// 		#size-cells = <1>;
+// 	};
+// 	*/
+
+// 	spidev@0 {
+// 		compatible = "jedec,spi-nor","micron,mt25", "spidev";
+// 		reg = <0>;
+// 		spi-max-frequency = <54000000>;
+// 	};
+// };
+
 &i2c2 {
-	clock-frequency = <100000>;
+	clock-frequency = <400000>;
 	pinctrl-names = "default", "gpio";
 	pinctrl-0 = <&pinctrl_i2c2>;
 	pinctrl-1 = <&pinctrl_i2c2_gpio>;
@@ -248,39 +212,75 @@
 	sda-gpios = <&gpio5 17 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 
-	lvibattery@10{
-		reg = <0x10>;    // EEPROM I2C address
+	lvibattery@b {
+		reg = <0x0b>;    // EEPROM I2C address
 
         #address-cells = <1>;
         #size-cells = <0>;
         compatible = "lvibattery";
-	}
-
-	typec@3d {
-		compatible = "nxp,ptn5150";
-		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_extcon>;
-		reg = <0x3d>;
-		// interrupt-parent = <&gpio1>;
-		// interrupts = <10 IRQ_TYPE_LEVEL_HIGH>;
-		// irq-is-id-quirk;
-		status ="okay";
-
-		port {
-			typec_dr_sw: endpoint {
-				remote-endpoint = <&usb3_drd_sw>;
-			};
-		};
 	};
 
-	lviconfig@52 {
-        reg = <0x52>;    // EEPROM I2C address
+	pca6416: gpio@20 {
+		compatible = "nxp,pcal6416";
+		reg = <0x20>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_pca6416>;
+		interrupt-parent = <&gpio1>;
+		interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
+
+		
+	};
+
+	ncs8801s@40 {
+		status = "okay";
+		compatible = "newcosemi,ncs8801s";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		reg = <0x40>, <0x70>, <0x75>;
+		screen-w = <1920>;
+		screen-h = <1080>;
+		hpd-gpios = <&pca6416 5 GPIO_ACTIVE_HIGH>;
+		rst-gpios = <&pca6416 3 GPIO_ACTIVE_LOW>;
+		pwd-gpios = <&pca6416 4 GPIO_ACTIVE_HIGH>;
+		edp-bl-enable-gpios = <&gpio5 3 GPIO_ACTIVE_HIGH>;
+
+		// bl-pwm = <&pwm2 0 1000000>;
+        brightness-levels = <0 25 50 75 100>;
+
+        default-brightness-level = <100>;
+
+	};  
+
+	lviconfig@54 {
+        reg = <0x54>;    // EEPROM I2C address
 
         #address-cells = <1>;
         #size-cells = <0>;
         compatible = "lviconfig";
 		// size = <32768> //size of EEPROM
     };
+
+	/*
+     * M24C08 at 0x54–0x57, 4 × 256 byte blocks = 1024 bytes total
+     *
+     * - compatible: tells Linux to use the at24 driver
+     * - reg: first I2C address
+     * - num-addresses: number of consecutive I2C addresses used by this device
+     * - pagesize: EEPROM internal write‐page size (in bytes)
+     * - size: total byte-size of the EEPROM
+     */
+    // eeprom@54 {
+    //     compatible     = "atmel,24c08", "atmel,24cXX";
+    //     reg            = <0x54>;
+    //     num-addresses  = <4>;
+    //     pagesize       = <16>;
+    //     size           = <1024>;
+    //     #address-cells = <1>;
+    //     #size-cells    = <0>;
+    // };
 
 	lvipanel@69 {
 		reg = <0x69>;
@@ -321,13 +321,16 @@
 // 	};
 
 	/* DS1337 RTC module */
-	rtc@68 {
-		compatible = "dallas,ds1337";
-		reg = <0x68>;
+	rtc@51 {
+		// compatible = "dallas,ds1307";
+		// compatible = "nxp,pcf85063";
+		compatible = "lvi,lvirtc";
+
+		reg = <0x51>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_rtc>;
 		interrupt-parent = <&gpio1>;
-		interrupts = <15 IRQ_TYPE_EDGE_FALLING>;
+		interrupts = <11 IRQ_TYPE_EDGE_FALLING>;
 		wakeup-source;
 		status = "okay";
 	};
@@ -365,7 +368,7 @@
 		compatible = "lvi,lvicam"; // Used to find compatible driver
 		pinctrl-names = "default"; // ? 
 		//clocks = <&clk_cam_ref>; // Refernce clock, generated by fpga
-		reset-gpios = <&gpio1 6 GPIO_ACTIVE_HIGH>; // ?
+		reset-gpios = <&gpio5 6 GPIO_ACTIVE_LOW>; // ?
 
 		ports {
  			#address-cells = <1>;
@@ -394,6 +397,20 @@
 				link-frequencies = /bits/ 64 <594000000>;
 				};
 			};
+
+			cam_pwr_hog {
+				gpio-hog;
+				gpios = <14 GPIO_ACTIVE_HIGH>;
+				output-high;
+				line-name = "cam_pwr";
+			};
+
+			hdmi_csi_rst_hog {
+				gpio-hog;
+				gpios = <14 GPIO_ACTIVE_HIGH>;
+				output-high;
+				line-name = "hdmi_csi_rst";
+			};
 			// 	 			tc358743_out: endpoint {
 			// 	remote-endpoint = <&mipi_csi2_in>;
 			// 	data-lanes = <1 2 3 4>;
@@ -403,7 +420,6 @@
 			// };
 		};
 	};
-
 };
 
 /* i2c4 (sw) = i2c4 (hw)*/
@@ -415,6 +431,52 @@
 	scl-gpios = <&gpio5 20 GPIO_ACTIVE_HIGH>;
 	sda-gpios = <&gpio5 21 GPIO_ACTIVE_HIGH>;
 	status = "okay";
+
+	typec@3d {
+		compatible = "nxp,ptn5150";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_extcon>;
+		reg = <0x3d>;
+		
+		interrupt-parent = <&gpio1>;
+		interrupts = <8 IRQ_TYPE_LEVEL_LOW>;
+		irq-is-id-quirk;
+		status ="okay";
+
+		port {
+			typec_dr_sw0: endpoint {
+				remote-endpoint = <&usb3_drd_sw0>;
+			};
+		};
+	};
+
+	typec@1d {
+		compatible = "nxp,ptn5150";
+		pinctrl-names = "default";
+		// pinctrl-0 = <&pinctrl_extcon>;
+		reg = <0x1d>;
+		
+		// interrupt-parent = <&gpio1>;
+		// interrupts = <10 IRQ_TYPE_LEVEL_HIGH>;
+		// irq-is-id-quirk;
+		status ="okay";
+
+		port {
+			typec_dr_sw1: endpoint {
+				remote-endpoint = <&usb3_drd_sw1>;
+			};
+		};
+	};
+
+	// dpot@2c {
+	// 	compatible = "cat,cat5157";
+	// 	reg = <0x2c>;
+	// 	/* Resistance range in ohms */
+	// 	resistance-min = <390>;
+	// 	resistance-max = <100000>;
+	// 	/* Default resistance value (in ohms) to be set at probe time */
+	// 	resistance-default = <75000>;
+	// };
 
 // 	ov5640_mipi1: ov5640_mipi@3c {
 // 		compatible = "ovti,ov5640";
@@ -502,37 +564,45 @@
 /* MIPI-DSI */
 &lcdif1 {
 	status = "disabled";
+	// compatible = "fsl,imx8mp-lcdif1";
+
 };
 
 /* LVDS */
 &lcdif2 {
 	status = "okay";
+	compatible = "fsl,imx8mp-lcdif2";
 };
 
 /* HDMI */
 &lcdif3 {
 	status = "okay";
+	// compatible = "fsl,imx8mp-lcdif3";
+
 	thres-low  = <1 2>;             /* (FIFO * 1 / 2) */
 	thres-high = <3 4>;             /* (FIFO * 3 / 4) */
 };
 
 &ldb {
-	status = "okay";
+    status = "okay";
+    fsl,dual-channel;
 
-	lvds-channel@0 {
-		fsl,data-mapping = "jeida";
-		fsl,data-width = <24>;
-		status = "disabled"; //disabled when testing touch screen on HDMI-A-1
+    lvds-channel@0 {
 
-		port@1 {
-			reg = <1>;
+        fsl,data-mapping = "spwg";
+        fsl,data-width = <24>;
+        status = "okay";
 
-			lvds_out: endpoint {
-				remote-endpoint = <&panel_in>;
-			};
-		};
-	};
+        port@1 {
+            reg = <1>;
+
+            lvds_out: endpoint {
+                remote-endpoint = <&panel_in>;  /* Correctly matches panel endpoint */
+            };
+        };
+    };
 };
+
 
 &ldb_phy {
 	status = "okay";
@@ -600,6 +670,8 @@
 	status = "okay";
 };
 
+
+//USB 1
 &usb3_phy0 {
 	fsl,phy-tx-vref-tune = <0xe>;
 	fsl,phy-tx-preemp-amp-tune = <3>;
@@ -615,7 +687,9 @@
 };
 
 &usb_dwc3_0 {
-	dr_mode = "host";
+	dr_mode = "otg";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_usb1_otg>;
 	hnp-disable;
 	srp-disable;
 	adp-disable;
@@ -626,29 +700,14 @@
 	status = "okay";
 
 	port {
-		usb3_drd_sw: endpoint {
-			remote-endpoint = <&typec_dr_sw>;
+		usb3_drd_sw0: endpoint {
+			remote-endpoint = <&typec_dr_sw0>;
 		};
 	};
 };
 
+//USB2
 &usb3_phy1 {
-	fsl,phy-tx-preemp-amp-tune = <3>;
-	fsl,phy-tx-vref-tune = <0xb>;
-	status = "okay";
-};
-
-&usb3_1 {
-	status = "okay";
-};
-
-&usb_dwc3_1 {
-	dr_mode = "host";
-	status = "okay";
-};
-
-/* Variscite setup
-&usb3_phy0 {
 	fsl,phy-tx-vref-tune = <0xe>;
 	fsl,phy-tx-preemp-amp-tune = <3>;
 	fsl,phy-tx-vboost-level = <5>;
@@ -658,12 +717,14 @@
 	status = "okay";
 };
 
-&usb3_0 {
+&usb3_1 {
 	status = "okay";
 };
 
-&usb_dwc3_0 {
+&usb_dwc3_1 {
 	dr_mode = "host";
+	pinctrl-names = "default";
+	// pinctrl-0 = <&pinctrl_usb2_otg>;
 	hnp-disable;
 	srp-disable;
 	adp-disable;
@@ -674,27 +735,12 @@
 	status = "okay";
 
 	port {
-		usb3_drd_sw: endpoint {
-			remote-endpoint = <&typec_dr_sw>;
+		usb3_drd_sw1: endpoint {
+			remote-endpoint = <&typec_dr_sw1>;
 		};
 	};
 };
 
-&usb3_phy1 {
-	fsl,phy-tx-preemp-amp-tune = <3>;
-	fsl,phy-tx-vref-tune = <0xb>;
-	status = "okay";
-};
-
-&usb3_1 {
-	status = "okay";
-};
-
-&usb_dwc3_1 {
-	dr_mode = "host";
-	status = "okay";
-};
-*/
 
 /* LVI USB setup
 	USB0 (hw=usb1)--> USB2.0 port
@@ -775,62 +821,62 @@
 	};
 };
 
-&ecspi1 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_ecspi1>;
-	cs-gpios = <&gpio5  9 GPIO_ACTIVE_LOW>,
-		   <&gpio1 12 GPIO_ACTIVE_LOW>,
-		   <&gpio2 10 GPIO_ACTIVE_LOW>;
-	status = "okay";
-	label="ecspi1";
+// &ecspi1 {
+// 	pinctrl-names = "default";
+// 	pinctrl-0 = <&pinctrl_ecspi1>;
+// 	cs-gpios = <&gpio5  9 GPIO_ACTIVE_LOW>,
+// 		   <&gpio1 12 GPIO_ACTIVE_LOW>,
+// 		   <&gpio2 10 GPIO_ACTIVE_LOW>;
+// 	status = "okay";
+// 	label="ecspi1";
 
-	/* Resistive touch controller */
-	/*
-	ads7846@0 {
-		compatible = "ti,ads7846";
-		reg = <0>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_restouch>;
-		interrupt-parent = <&gpio1>;
-		interrupts = <7 IRQ_TYPE_EDGE_FALLING>;
-		spi-max-frequency = <1500000>;
-		pendown-gpio = <&gpio1 7 GPIO_ACTIVE_LOW>;
-		ti,x-min = /bits/ 16 <125>;
-		ti,x-max = /bits/ 16 <4008>;
-		ti,y-min = /bits/ 16 <282>;
-		ti,y-max = /bits/ 16 <3864>;
-		ti,x-plate-ohms = /bits/ 16 <180>;
-		ti,pressure-max = /bits/ 16 <255>;
-		ti,debounce-max = /bits/ 16 <10>;
-		ti,debounce-tol = /bits/ 16 <3>;
-		ti,debounce-rep = /bits/ 16 <1>;
-		ti,settle-delay-usec = /bits/ 16 <150>;
-		ti,keep-vref-on;
-		wakeup-source;
-		status = "okay";
-	};
-	*/
+// 	/* Resistive touch controller */
+// 	/*
+// 	ads7846@0 {
+// 		compatible = "ti,ads7846";
+// 		reg = <0>;
+// 		pinctrl-names = "default";
+// 		pinctrl-0 = <&pinctrl_restouch>;
+// 		interrupt-parent = <&gpio1>;
+// 		interrupts = <7 IRQ_TYPE_EDGE_FALLING>;
+// 		spi-max-frequency = <1500000>;
+// 		pendown-gpio = <&gpio1 7 GPIO_ACTIVE_LOW>;
+// 		ti,x-min = /bits/ 16 <125>;
+// 		ti,x-max = /bits/ 16 <4008>;
+// 		ti,y-min = /bits/ 16 <282>;
+// 		ti,y-max = /bits/ 16 <3864>;
+// 		ti,x-plate-ohms = /bits/ 16 <180>;
+// 		ti,pressure-max = /bits/ 16 <255>;
+// 		ti,debounce-max = /bits/ 16 <10>;
+// 		ti,debounce-tol = /bits/ 16 <3>;
+// 		ti,debounce-rep = /bits/ 16 <1>;
+// 		ti,settle-delay-usec = /bits/ 16 <150>;
+// 		ti,keep-vref-on;
+// 		wakeup-source;
+// 		status = "okay";
+// 	};
+// 	*/
 
-	can0: can@1 {
-		compatible = "microchip,mcp251xfd";
-		reg = <1>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_can>;
-		interrupt-parent = <&gpio1>;
-		interrupts = <6 IRQ_TYPE_LEVEL_LOW>;
-		microchip,rx-int-gpios = <&gpio5 4 GPIO_ACTIVE_LOW>;
-		clocks = <&can0_osc>;
-		spi-max-frequency = <20000000>;
-		status = "okay";
-	};
+// 	can0: can@1 {
+// 		compatible = "microchip,mcp251xfd";
+// 		reg = <1>;
+// 		pinctrl-names = "default";
+// 		pinctrl-0 = <&pinctrl_can>;
+// 		interrupt-parent = <&gpio1>;
+// 		interrupts = <6 IRQ_TYPE_LEVEL_LOW>;
+// 		microchip,rx-int-gpios = <&gpio5 4 GPIO_ACTIVE_LOW>;
+// 		clocks = <&can0_osc>;
+// 		spi-max-frequency = <20000000>;
+// 		status = "okay";
+// 	};
 
-	spidev@2 {
-		compatible = "var,spidev";
-		reg = <2>;
-		spi-max-frequency = <12000000>;
-		status = "okay";
-	};
-};
+// 	spidev@2 {
+// 		compatible = "var,spidev";
+// 		reg = <2>;
+// 		spi-max-frequency = <12000000>;
+// 		status = "okay";
+// 	};
+// };
 
 &ldo4 {
 	regulator-min-microvolt = <1800000>;
@@ -870,7 +916,7 @@
 	*/
 	pinctrl_pwm2: pwm2grp {
 		fsl,pins = <
-			MX8MP_IOMUXC_GPIO1_IO09__PWM2_OUT				0x116
+			MX8MP_IOMUXC_SPDIF_RX__PWM2_OUT  				0x116
 		>;
 	};
 
@@ -888,6 +934,9 @@
 			MX8MP_IOMUXC_SAI1_TXD3__ENET1_RGMII_TD3				0x00
 			MX8MP_IOMUXC_SAI1_TXD4__ENET1_RGMII_TX_CTL			0x00
 			MX8MP_IOMUXC_SAI1_TXD5__ENET1_RGMII_TXC				0x00
+
+			MX8MP_IOMUXC_SAI1_RXD2__ENET1_MDC				0x00
+			MX8MP_IOMUXC_SAI1_RXD3__ENET1_MDIO				0x00
 		>;
 	};
 
@@ -1019,7 +1068,7 @@
 
 	pinctrl_ecspi1: ecspi1grp {
 		fsl,pins = <
-			MX8MP_IOMUXC_ECSPI1_SCLK__ECSPI1_SCLK				0x12
+			MX8MP_IOMUXC_ECSPI1_SCLK__GPIO5_IO06				0x12
 			MX8MP_IOMUXC_ECSPI1_MOSI__ECSPI1_MOSI				0x12
 			MX8MP_IOMUXC_ECSPI1_MISO__ECSPI1_MISO				0x12
 			MX8MP_IOMUXC_ECSPI1_SS0__GPIO5_IO09				0x12
@@ -1034,7 +1083,6 @@
 		>;
 	};
 
-
 	pinctrl_restouch: restouchgrp {
 		fsl,pins = <
 			MX8MP_IOMUXC_GPIO1_IO07__GPIO1_IO07				0xc0
@@ -1043,7 +1091,7 @@
 
 	pinctrl_extcon: extcongrp {
 		fsl,pins = <
-			MX8MP_IOMUXC_GPIO1_IO10__GPIO1_IO10				0x10
+			MX8MP_IOMUXC_GPIO1_IO08__GPIO1_IO08				0x10
 		>;
 	};
 
@@ -1082,7 +1130,13 @@
 
 	pinctrl_rtc: rtcgrp {
 		fsl,pins = <
-			MX8MP_IOMUXC_GPIO1_IO15__GPIO1_IO15 				0x1c0
+		MX8MP_IOMUXC_GPIO1_IO11__GPIO1_IO11 				0x1c0 /* Schmitt trigger input */
+		>;
+	};
+
+	pinctrl_pca6416: pca6416grp {
+		fsl,pins = <
+			MX8MP_IOMUXC_GPIO1_IO13__GPIO1_IO13				0x1c6
 		>;
 	};
 
@@ -1099,6 +1153,18 @@
 		--> 101000110 = 0x146 */
 		fsl,pins = <
 			MX8MP_IOMUXC_NAND_READY_B__GPIO3_IO16 0x140
+		>;
+	};
+
+	pinctrl_usb1_otg: usb1_otg_grp {
+		fsl,pins = <
+			MX8MP_IOMUXC_GPIO1_IO10__USB1_ID 0x1c6
+		>;
+	};
+	
+	pinctrl_usb2_otg: usb2_otg_grp {
+		fsl,pins = <
+			MX8MP_IOMUXC_GPIO1_IO11__USB2_ID 0x1c6
 		>;
 	};
 };

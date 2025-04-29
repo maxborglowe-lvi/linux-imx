@@ -87,8 +87,8 @@ my_defconfig.config should contain CONFIG_VIDEO_LVICAM=y only.
 
 6. Build kernel with patches and LVICAM (LVICAM enabled in defconfig)
 
-       $ source /opt/fslc-xwayland/3.3/environment-setup-cortexa53-crypto-fslc-linux
-       $ export LDFLAGS=
+       source /opt/fslc-xwayland/3.3/environment-setup-cortexa53-crypto-fslc-linux
+       export LDFLAGS=
 
        # Place my_defconfig.config inside ~/var-fsl-yocto/local_repos/linux-imx/arch/arch64/configs
 
@@ -101,7 +101,7 @@ my_defconfig.config should contain CONFIG_VIDEO_LVICAM=y only.
        $ make ARCH=arm64 -j8 defconfig imx8_var_defconfig my_defconfig.config
        $ make ARCH=arm64 -j8
        # build device-tree
-       $ make ARCH=arm64 freescale/imx8mp-var-dart-dt8mcustomboard-lvi.dtb 
+       make ARCH=arm64 freescale/imx8mp-var-dart-dt8mcustomboard-lvi.dtb 
 
        # Place install.sh script inside ~/var-fsl-yocto/local_repos/linux-imx
 
@@ -109,8 +109,8 @@ my_defconfig.config should contain CONFIG_VIDEO_LVICAM=y only.
 
 7. Use Picocom
 
-       $ sudo apt-get install picocom
-       $ sudo picocom -b 115200 /dev/ttyUSB0
+       sudo apt-get install picocom
+       sudo picocom -b 115200 /dev/ttyUSB0
 
 
 8. u-boot (press any key when booting the dev kit to enter u-boot)
@@ -234,3 +234,39 @@ ENV{ID_VENDOR_ID}=="<2575>",ENV{ID_MODEL_ID}=="<C300>",DEVPATH=="/devices/platfo
 
 
 /devices/platform/soc@0/32f10100.usb/38100000.dwc3/xhci-hcd.0.auto/usb1/1-1/1-1.1/1-1.1.1/
+
+### Install built kernel images, modules, and device trees on an SD card
+
+https://variwiki.com/index.php?title=Yocto_Build_Linux&release=mx8mp-yocto-hardknott-5.10.72_2.2.1-v1.1#Install_the_built_kernel_images,_modules,_and_device_trees_on_an_SD_card
+
+~/var-fsl-yocto/rootfs
+
+Copy the Image.gz and device trees to the SD card boot partition, and install the modules in the SD card rootfs partition.
+Assuming the rootfs partition is mounted on /media/user/rootfs:
+
+Install the kernel image and modules:
+    WORKDIR=~/var-fsl-yocto/local_repos
+    cd ${WORKDIR}/linux-imx
+    kver=$(strings arch/arm64/boot/Image | grep -i "Linux version" | awk 'NR==1 {print $3}')
+    sudo cp arch/arm64/boot/Image.gz /media/maxborglowe/rootfs/boot/Image.gz-${kver}
+    sudo ln -fs /boot/Image.gz-${kver} /media/maxborglowe/rootfs/boot/Image.gz
+    sudo cp ~/var-fsl-yocto/rootfs/* /media/maxborglowe/rootfs
+
+    sudo cp arch/arm64/boot/dts/freescale/imx8mp-var-dart-dt8mcustomboard-lvi.dtb /media/maxborglowe/rootfs/boot/
+
+Install the device trees:
+    sudo cp arch/arm64/boot/dts/freescale/*imx*var*.dtb /media/maxborglowe/rootfs/boot/
+
+
+
+
+
+
+$ cd /home/maxborglowe/var-fsl-yocto/local_repos/linux-imx
+$ kver=$(strings arch/arm64/boot/Image | grep -i "Linux version" | awk 'NR==1 {print $3}')
+$ sudo cp arch/arm64/boot/Image.gz /media/maxborglowe/rootfs/boot/Image.gz-${kver}
+############### $ sudo ln -fs /boot/Image.gz-${kver} /media/maxborglowe/rootfs/boot/Image.gz
+$ sudo cp /home/maxborglowe/var-fsl-yocto/rootfs/* /media/maxborglowe/rootfs
+
+Install the device trees:
+$ sudo cp arch/arm64/boot/dts/freescale/*imx*var*.dtb /media/maxborglowe/rootfs/boot/

@@ -86,11 +86,11 @@
 	status = "disabled";
 };
 
-&pcie {
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_pcie>;
-	reset-gpio = <&gpio4 7 GPIO_ACTIVE_LOW>;
-};
+// &pcie {
+// 	pinctrl-names = "default";
+// 	pinctrl-0 = <&pinctrl_pcie>;
+// 	reset-gpio = <&gpio4 7 GPIO_ACTIVE_LOW>;
+// };
 
 &usb_dwc3_0 {
 	extcon = <&extcon_ptn5150>;
@@ -137,11 +137,11 @@
 		>;
 	};
 
-	pinctrl_pcie: pciegrp {
-		fsl,pins = <
-			MX8MP_IOMUXC_SAI1_RXD5__GPIO4_IO07				0x40
-		>;
-	};
+	// pinctrl_pcie: pciegrp {
+	// 	fsl,pins = <
+	// 		MX8MP_IOMUXC_SAI1_RXD5__GPIO4_IO07				0x40
+	// 	>;
+	// };
 
 	pinctrl_csi1: csi1grp {
 		fsl,pins = <

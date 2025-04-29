@@ -9,6 +9,9 @@
 #   https://clang.llvm.org/docs/ClangFormatStyleOptions.html
 #
 ---
+
+BasedOnStyle: LLVM
+
 AccessModifierOffset: -4
 AlignAfterOpenBracket: Align
 AlignConsecutiveAssignments: false

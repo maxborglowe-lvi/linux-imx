@@ -169,6 +169,8 @@ struct mxc_isi_fmt *mxc_isi_find_format(const u32 *pixelformat,
 		fmt = &mxc_isi_out_formats[i];
 		if (pixelformat && fmt->fourcc == *pixelformat) {
 			printk("[%s] call : lvicam : pixelformat && fmt->fourcc == *pixelformat : %s", __func__, fmt->name);
+			printk("[%s] call : lvicam : mxc_isi_out_formats : %d", __func__, ARRAY_SIZE(mxc_isi_out_formats));
+
 
 			return fmt;
 		}
@@ -459,6 +461,8 @@ static void cap_vb2_buffer_queue(struct vb2_buffer *vb2)
 	unsigned long flags;
 
 	spin_lock_irqsave(&isi_cap->slock, flags);
+
+	printk("[%s] call : lvicam : isi_cap->dst_f.fmt->mdataplanes = %d", __func__, isi_cap->dst_f.fmt->mdataplanes);
 
 	mxc_isi_update_buf_paddr(buf, isi_cap->dst_f.fmt->mdataplanes);
 	list_add_tail(&buf->list, &isi_cap->out_pending);
@@ -770,6 +774,8 @@ static bool is_entity_link_setup(struct mxc_isi_cap_dev *isi_cap)
 
 static int isi_cap_fmt_init(struct mxc_isi_cap_dev *isi_cap)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_frame *dst_f = &isi_cap->dst_f;
 	struct mxc_isi_frame *src_f = &isi_cap->src_f;
 	struct v4l2_subdev_format src_fmt;
@@ -811,6 +817,8 @@ static int isi_cap_fmt_init(struct mxc_isi_cap_dev *isi_cap)
 
 static int mxc_isi_capture_open(struct file *file)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_cap_dev *isi_cap = video_drvdata(file);
 	struct mxc_isi_dev *mxc_isi = mxc_isi_get_hostdata(isi_cap->pdev);
 	struct device *dev = &isi_cap->pdev->dev;
@@ -821,6 +829,8 @@ static int mxc_isi_capture_open(struct file *file)
 
 	parent = of_get_parent(isi_cap->pdev->dev.of_node);
 	is_imx8_isi = of_device_is_compatible(parent, "fsl,imx8-isi");
+
+	printk(KERN_INFO "Boolean value: %s\n", is_imx8_isi ? "true" : "false");
 
 	mutex_lock(&isi_cap->lock);
 	isi_cap->is_link_setup = is_entity_link_setup(isi_cap);
@@ -1112,6 +1122,9 @@ static int mxc_isi_source_fmt_init(struct mxc_isi_cap_dev *isi_cap)
 static int mxc_isi_cap_s_fmt_mplane(struct file *file, void *priv,
 				    struct v4l2_format *f)
 {
+
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_cap_dev *isi_cap = video_drvdata(file);
 	struct v4l2_pix_format_mplane *pix = &f->fmt.pix_mp;
 	struct mxc_isi_frame *dst_f = &isi_cap->dst_f;
@@ -1131,6 +1144,8 @@ static int mxc_isi_cap_s_fmt_mplane(struct file *file, void *priv,
 	dev_dbg(&isi_cap->pdev->dev, "%s, fmt=0x%X\n", __func__, pix->pixelformat);
 	if (vb2_is_busy(&isi_cap->vb2_q))
 		return -EBUSY;
+
+	printk("[%s] call : lvicam : ARRAY_SIZE(mxc_isi_out_formats) = %d", __func__, ARRAY_SIZE(mxc_isi_out_formats));
 
 	/* Check out put format */
 	for (i = 0; i < ARRAY_SIZE(mxc_isi_out_formats); i++) {
@@ -1158,6 +1173,9 @@ static int mxc_isi_cap_s_fmt_mplane(struct file *file, void *priv,
 	dst_f->width = pix->width;
 
 	pix->num_planes = fmt->memplanes;
+
+	printk("[%s] call : lvicam : fmt->memplanes = %d", __func__, fmt->memplanes);
+	
 
 	for (i = 0; i < pix->num_planes; i++) {
 		bpl = pix->plane_fmt[i].bytesperline;
@@ -1404,6 +1422,8 @@ static int mxc_isi_cap_s_selection(struct file *file, void *fh,
 static int mxc_isi_cap_enum_framesizes(struct file *file, void *priv,
 				       struct v4l2_frmsizeenum *fsize)
 {
+	printk("[%s] call : lvicam", __func__);
+
 	struct mxc_isi_cap_dev *isi_cap = video_drvdata(file);
 	struct device_node *parent;
 	struct v4l2_subdev *sd;
