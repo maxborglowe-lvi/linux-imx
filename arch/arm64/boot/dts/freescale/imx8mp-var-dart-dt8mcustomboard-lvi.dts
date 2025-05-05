@@ -153,33 +153,33 @@
 
 
 
-&eqos {
-	mdio {
-		ethphy1: ethernet-phy@1 {
-			compatible = "ethernet-phy-ieee802.3-c22";
-			reg = <1>;
-			at803x,eee-disabled;
-			eee-broken-1000t;
-			reset-gpios = <&pca6416 11 GPIO_ACTIVE_LOW>;
-			reset-assert-us = <10000>;
-			reset-deassert-us = <20000>;
-			vddio-supply = <&vddio1>;
+// &eqos {
+// 	mdio {
+// 		ethphy1: ethernet-phy@1 {
+// 			compatible = "ethernet-phy-ieee802.3-c22";
+// 			reg = <1>;
+// 			at803x,eee-disabled;
+// 			eee-broken-1000t;
+// 			reset-gpios = <&pca6416 11 GPIO_ACTIVE_LOW>;
+// 			reset-assert-us = <10000>;
+// 			reset-deassert-us = <20000>;
+// 			vddio-supply = <&vddio1>;
 
-			vddio1: vddio-regulator {
-				regulator-min-microvolt = <1800000>;
-				regulator-max-microvolt = <1800000>;
-			};
-		};
-	};
-};
+// 			vddio1: vddio-regulator {
+// 				regulator-min-microvolt = <1800000>;
+// 				regulator-max-microvolt = <1800000>;
+// 			};
+// 		};
+// 	};
+// };
 
-&fec {
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_fec>;
-	phy-mode = "rgmii";
-	phy-handle = <&ethphy1>;
-	status = "okay";
-};
+// &fec {
+// 	pinctrl-names = "default";
+// 	pinctrl-0 = <&pinctrl_fec>;
+// 	phy-mode = "rgmii";
+// 	phy-handle = <&ethphy1>;
+// 	status = "okay";
+// };
 
 // &flexspi {
 // 	pinctrl-names = "default";

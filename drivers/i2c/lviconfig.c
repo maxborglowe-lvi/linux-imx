@@ -159,7 +159,7 @@ static long lviconfig_ioctl(struct file *file, unsigned int cmd,
 			return -EIO;
 		}
 
-		// msleep(1); // 10 milliseconds delay to ensure EEPROM is ready
+		msleep(1); // 1 milliseconds delay to ensure EEPROM is ready
 
 		break;
 
