@@ -147,6 +147,10 @@ https://variwiki.com/index.php?title=U-Boot_4.1.15_features
 
         $ gst-launch-1.0 v4l2src device=/dev/video1 ! video/x-raw,width=1920,height=1080,format=NV12 ! waylandsink
 
+        # run in background without printouts:
+        gst-launch-1.0 v4l2src device=/dev/video1 ! video/x-raw,width=1920,height=1080,format=NV12 ! waylandsink >/dev/null 2>&1 &
+
+
 ## External files
 
 ### Install.sh script
@@ -242,20 +246,21 @@ https://variwiki.com/index.php?title=Yocto_Build_Linux&release=mx8mp-yocto-hardk
 ~/var-fsl-yocto/rootfs
 
 Copy the Image.gz and device trees to the SD card boot partition, and install the modules in the SD card rootfs partition.
-Assuming the rootfs partition is mounted on /media/user/rootfs:
+Assuming the rootfs partition is mounted on /media/root:
 
 Install the kernel image and modules:
     WORKDIR=~/var-fsl-yocto/local_repos
     cd ${WORKDIR}/linux-imx
     kver=$(strings arch/arm64/boot/Image | grep -i "Linux version" | awk 'NR==1 {print $3}')
-    sudo cp arch/arm64/boot/Image.gz /media/maxborglowe/rootfs/boot/Image.gz-${kver}
-    sudo ln -fs /boot/Image.gz-${kver} /media/maxborglowe/rootfs/boot/Image.gz
-    sudo cp ~/var-fsl-yocto/rootfs/* /media/maxborglowe/rootfs
+    sudo cp arch/arm64/boot/Image.gz /media/root/boot/Image.gz-${kver}
+    sudo ln -fs /boot/Image.gz-${kver} /media/root/boot/Image.gz
+    sudo cp -r ~/var-fsl-yocto/rootfs/* /media/root
+    sudo rsync -Kra $WORKDIR/rootfs/* /media/root
 
-    sudo cp arch/arm64/boot/dts/freescale/imx8mp-var-dart-dt8mcustomboard-lvi.dtb /media/maxborglowe/rootfs/boot/
+    sudo cp arch/arm64/boot/dts/freescale/imx8mp-var-dart-dt8mcustomboard-lvi.dtb /media/root/boot/
 
 Install the device trees:
-    sudo cp arch/arm64/boot/dts/freescale/*imx*var*.dtb /media/maxborglowe/rootfs/boot/
+    sudo cp arch/arm64/boot/dts/freescale/*imx*var*.dtb /media/root/boot/
 
 
 
