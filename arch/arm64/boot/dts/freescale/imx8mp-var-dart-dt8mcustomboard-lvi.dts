@@ -26,21 +26,9 @@
 		};
 	};
 
-	gpio-lvi {
-		compatible = "lviseesaw";
-		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_seesaw>;
-		gpio-controller;
-		#gpio-cells = <2>;
-		status = "okay";
-
-		lviseesaw {
-			input;
-			gpios = <&gpio3 16 GPIO_ACTIVE_LOW>;
-			interrupt-parent = <&gpio3>;
-			interrupts = <16 IRQ_TYPE_EDGE_FALLING>;
-		};
-		
+	lvigpio {
+		compatible = "lvi,lvigpio";
+		seesaw-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
 	};
 
 	reg_usdhc2_vmmc: regulator-usdhc2-vmmc {
@@ -77,8 +65,8 @@
 		status = "okay";
 		compatible = "panel-lvds";
 		data-mapping = "vesa-24";
-		width-mm = <383>;
-		height-mm = <215>;
+		width-mm = <381>;
+		height-mm = <214>;
 		backlight = <&backlight>;
 
 
@@ -93,7 +81,7 @@
             vfront-porch = <4>;
             hsync-len = <44>;
             vsync-len = <5>;
-            hsync-active = <0>;
+            hsync-active = <1>;
             vsync-active = <0>;
             de-active = <1>;
 			// interlaced = <1>;
@@ -132,6 +120,14 @@
 		#clock-cells = <0>;
 		compatible = "fixed-clock";
 		clock-frequency = <27000000>;
+	};
+
+	
+	lvipwm: lvipwm {
+		status = "okay";
+		compatible = "lvi,lvipwm";
+		pwms = <&pwm1 0 255 0>; // PWM controller, channel, period, polarity
+		// label = "pwm-led";
 	};
 };
 
@@ -212,13 +208,7 @@
 	sda-gpios = <&gpio5 17 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 
-	lvibattery@b {
-		reg = <0x0b>;    // EEPROM I2C address
-
-        #address-cells = <1>;
-        #size-cells = <0>;
-        compatible = "lvibattery";
-	};
+	
 
 	pca6416: gpio@20 {
 		compatible = "nxp,pcal6416";
@@ -251,7 +241,6 @@
         brightness-levels = <0 25 50 75 100>;
 
         default-brightness-level = <100>;
-
 	};  
 
 	lviconfig@54 {
@@ -259,7 +248,7 @@
 
         #address-cells = <1>;
         #size-cells = <0>;
-        compatible = "lviconfig";
+        compatible = "lvi,lviconfig";
 		// size = <32768> //size of EEPROM
     };
 
@@ -398,6 +387,7 @@
 				};
 			};
 
+			/* unused */
 			cam_pwr_hog {
 				gpio-hog;
 				gpios = <14 GPIO_ACTIVE_HIGH>;
@@ -405,6 +395,7 @@
 				line-name = "cam_pwr";
 			};
 
+			/* unused */
 			hdmi_csi_rst_hog {
 				gpio-hog;
 				gpios = <14 GPIO_ACTIVE_HIGH>;
@@ -424,13 +415,22 @@
 
 /* i2c4 (sw) = i2c4 (hw)*/
 &i2c4 {
-	clock-frequency = <400000>;
+	clock-frequency = <100000>;
 	pinctrl-names = "default", "gpio";
 	pinctrl-0 = <&pinctrl_i2c4>;
 	pinctrl-1 = <&pinctrl_i2c4_gpio>;
 	scl-gpios = <&gpio5 20 GPIO_ACTIVE_HIGH>;
 	sda-gpios = <&gpio5 21 GPIO_ACTIVE_HIGH>;
 	status = "okay";
+
+	lvibattery@b {
+
+        compatible = "lvi,lvibattery";
+		reg = <0xb>;    // EEPROM I2C address
+
+        #address-cells = <1>;
+        #size-cells = <0>;
+	};
 
 	typec@3d {
 		compatible = "nxp,ptn5150";
@@ -457,15 +457,15 @@
 		reg = <0x1d>;
 		
 		// interrupt-parent = <&gpio1>;
-		// interrupts = <10 IRQ_TYPE_LEVEL_HIGH>;
+		// interrupts = <7 IRQ_TYPE_LEVEL_HIGH>;
 		// irq-is-id-quirk;
 		status ="okay";
 
-		port {
-			typec_dr_sw1: endpoint {
-				remote-endpoint = <&usb3_drd_sw1>;
-			};
-		};
+		// port {
+		// 	typec_dr_sw1: endpoint {
+		// 		remote-endpoint = <&usb3_drd_sw1>;
+		// 	};
+		// };
 	};
 
 	// dpot@2c {
@@ -707,39 +707,39 @@
 };
 
 //USB2
-&usb3_phy1 {
-	fsl,phy-tx-vref-tune = <0xe>;
-	fsl,phy-tx-preemp-amp-tune = <3>;
-	fsl,phy-tx-vboost-level = <5>;
-	fsl,phy-comp-dis-tune = <7>;
-	fsl,pcs-tx-deemph-3p5db = <0x21>;
-	fsl,phy-pcs-tx-swing-full = <0x7f>;
-	status = "okay";
-};
+// &usb3_phy1 {
+// 	fsl,phy-tx-vref-tune = <0xe>;
+// 	fsl,phy-tx-preemp-amp-tune = <3>;
+// 	fsl,phy-tx-vboost-level = <5>;
+// 	fsl,phy-comp-dis-tune = <7>;
+// 	fsl,pcs-tx-deemph-3p5db = <0x21>;
+// 	fsl,phy-pcs-tx-swing-full = <0x7f>;
+// 	status = "okay";
+// };
 
-&usb3_1 {
-	status = "okay";
-};
+// &usb3_1 {
+// 	status = "okay";
+// };
 
-&usb_dwc3_1 {
-	dr_mode = "host";
-	pinctrl-names = "default";
-	// pinctrl-0 = <&pinctrl_usb2_otg>;
-	hnp-disable;
-	srp-disable;
-	adp-disable;
-	usb-role-switch;
-	role-switch-default-mode = "none";
-	snps,dis-u1-entry-quirk;
-	snps,dis-u2-entry-quirk;
-	status = "okay";
+// &usb_dwc3_1 {
+// 	dr_mode = "host";
+// 	pinctrl-names = "default";
+// 	// pinctrl-0 = <&pinctrl_usb2_otg>;
+// 	hnp-disable;
+// 	srp-disable;
+// 	adp-disable;
+// 	usb-role-switch;
+// 	role-switch-default-mode = "none";
+// 	snps,dis-u1-entry-quirk;
+// 	snps,dis-u2-entry-quirk;
+// 	status = "okay";
 
-	port {
-		usb3_drd_sw1: endpoint {
-			remote-endpoint = <&typec_dr_sw1>;
-		};
-	};
-};
+// 	port {
+// 		usb3_drd_sw1: endpoint {
+// 			remote-endpoint = <&typec_dr_sw1>;
+// 		};
+// 	};
+// };
 
 
 /* LVI USB setup

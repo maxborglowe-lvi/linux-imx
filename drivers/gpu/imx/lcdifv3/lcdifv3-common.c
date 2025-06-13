@@ -953,7 +953,13 @@ static int imx_lcdifv3_runtime_resume(struct device *dev)
 	/* clear sw_reset */
 	writel(CTRL_SW_RESET, lcdifv3->base + LCDIFV3_CTRL_CLR);
 
-	build_color_matrix(color_matrix, 200, 200, 200);
+	imx_lcdifv3_ioctl_create();
+
+	// Print pointers properly
+	printk(KERN_INFO "lcdifv3_ioctl: lcdifv3=%px, lcdifv3->base=%px\n",
+	       lcdifv3, lcdifv3 ? lcdifv3->base : NULL);
+
+	build_color_matrix(color_matrix, 128, 128, 128, 128, 128, 128);
 	lcdifv3_config_rgb_to_ycbcr(lcdifv3->base, color_matrix);
 	dev_info(lcdifv3->dev, "CSC0_CTRL after resume = 0x%08x\n",
 		 readl(lcdifv3->base + LCDIFV3_CSC0_CTRL));

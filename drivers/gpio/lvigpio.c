@@ -1,125 +1,154 @@
 #include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/init.h>
-#include <linux/i2c.h>
-#include <linux/gpio.h>
+#include <linux/platform_device.h>
+#include <linux/gpio/consumer.h>
+#include <linux/fs.h>
+#include <linux/cdev.h>
+#include <linux/uaccess.h>
+#include <linux/ioctl.h>
+#include <linux/device.h>
 #include <linux/of.h>
-#include <linux/err.h>
 
-#define TCA6416_REG_I2C_ADDRESS 0x20
-#define TCA6416_REG_OUTPUT_PORT0   0x02
-#define TCA6416_REG_OUTPUT_PORT1   0x03
-#define TCA6416_REG_CONFIGURATION_PORT0 0x06
-#define TCA6416_REG_CONFIGURATION_PORT1 0x07
+#define DEVICE_NAME "lvigpio"
+#define CLASS_NAME "lvigpio_class"
 
-// Desired Values
-#define CONFIG_PORT0  0x66
-#define CONFIG_PORT1  0x00
-#define OUTPUT_PORT0  0xEE
-#define OUTPUT_PORT1  0x3F
+#define LVIGPIO_IOC_MAGIC 'L'
+#define LVIGPIO_IOC_READ _IOR(LVIGPIO_IOC_MAGIC, 1, int)
 
-// Define the I2C client structure for your GPIO expander
-struct tca6416_data {
-    struct i2c_client *client;
+static dev_t dev_num;
+static struct cdev lvigpio_cdev;
+static struct class *lvigpio_class;
+static struct device *lvigpio_device;
+
+struct lvigpio_dev {
+	struct device *dev;
+	struct gpio_desc *gpiod;
 };
 
-// Write a register in the TCA6416 device
-static int tca6416_write_register(struct i2c_client *client, u8 reg, u8 value)
+static struct lvigpio_dev *lvigpio_data;
+
+static int lvigpio_open(struct inode *inode, struct file *file)
 {
-    if (!client || !client->adapter) {
-        pr_err("Invalid I2C client or adapter\n");
-        return -EINVAL;
-    }
-
-    pr_debug("Writing to reg: 0x%x, value: 0x%x\n", reg, value);
-
-    // Check that the I2C adapter supports the SMBus byte data functionality
-    if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA)) {
-        pr_err("I2C adapter does not support SMBus byte data\n");
-        return -EIO;
-    }
-
-    // Write the byte to the I2C device
-    return i2c_smbus_write_byte_data(client, reg, value);
+	file->private_data = lvigpio_data;
+	return 0;
 }
 
-// Initialization function for the TCA6416 GPIO expander
-static int tca6416_init(struct i2c_client *client)
+static int lvigpio_release(struct inode *inode, struct file *file)
 {
-    struct tca6416_data *data;
-
-    // Validate the I2C client
-    if (!client) {
-        pr_err("Invalid I2C client during initialization\n");
-        return -EINVAL;
-    }
-
-    // Allocate memory for the driver data
-    data = devm_kzalloc(&client->dev, sizeof(struct tca6416_data), GFP_KERNEL);
-    if (!data) {
-        pr_err("Failed to allocate memory for driver data\n");
-        return -ENOMEM;
-    }
-
-    // Set up the I2C client data structure
-    data->client = client;
-    i2c_set_clientdata(client, data);
-
-    // Configure GPIO directions
-    if (tca6416_write_register(client, TCA6416_REG_CONFIGURATION_PORT0, CONFIG_PORT0) < 0)
-        return -EIO;
-    if (tca6416_write_register(client, TCA6416_REG_CONFIGURATION_PORT1, CONFIG_PORT1) < 0)
-        return -EIO;
-
-    // Set default output values
-    if (tca6416_write_register(client, TCA6416_REG_OUTPUT_PORT0, OUTPUT_PORT0) < 0)
-        return -EIO;
-    if (tca6416_write_register(client, TCA6416_REG_OUTPUT_PORT1, OUTPUT_PORT1) < 0)
-        return -EIO;
-
-    pr_info("TCA6416 GPIO expander initialized\n");
-
-    return 0;
+	return 0;
 }
 
-// Probe function called when the device is detected
-static int tca6416_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static long lvigpio_ioctl(struct file *file, unsigned int cmd,
+			  unsigned long arg)
 {
-    pr_info("TCA6416 probe function called\n");
+	struct lvigpio_dev *data = file->private_data;
+	int value;
 
-    // Initialize the device
-    return tca6416_init(client);
+	if (_IOC_TYPE(cmd) != LVIGPIO_IOC_MAGIC)
+		return -ENOTTY;
+
+	switch (cmd) {
+	case LVIGPIO_IOC_READ:
+		value = gpiod_get_value(data->gpiod);
+		if (copy_to_user((int __user *)arg, &value, sizeof(int)))
+			return -EFAULT;
+		break;
+	default:
+		return -ENOTTY;
+	}
+
+	return 0;
 }
 
-// Remove function for cleanup
-static int tca6416_remove(struct i2c_client *client)
-{
-    pr_info("TCA6416 remove function called\n");
-
-    // Cleanup code (if necessary)
-    return 0;
-}
-
-// Device tree matching table
-static const struct of_device_id tca6416_of_match[] = {
-    { .compatible = "ti,tca6416", },
-    { },
+static const struct file_operations lvigpio_fops = {
+	.owner = THIS_MODULE,
+	.open = lvigpio_open,
+	.release = lvigpio_release,
+	.unlocked_ioctl = lvigpio_ioctl,
 };
-MODULE_DEVICE_TABLE(of, tca6416_of_match);
 
-// I2C driver structure
-static struct i2c_driver tca6416_driver = {
+static int lvigpio_probe(struct platform_device *pdev)
+{
+	int ret;
+
+	lvigpio_data =
+		devm_kzalloc(&pdev->dev, sizeof(*lvigpio_data), GFP_KERNEL);
+	if (!lvigpio_data)
+		return -ENOMEM;
+
+	lvigpio_data->dev = &pdev->dev;
+
+	// Get GPIO from device tree (label: "gpio" or "gpios")
+	lvigpio_data->gpiod = devm_gpiod_get(&pdev->dev, "seesaw", GPIOD_IN);
+	if (IS_ERR(lvigpio_data->gpiod)) {
+		dev_err(&pdev->dev, "Failed to get GPIO\n");
+		return PTR_ERR(lvigpio_data->gpiod);
+	}
+
+	// Allocate char device region
+	ret = alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME);
+	if (ret)
+		return ret;
+
+	cdev_init(&lvigpio_cdev, &lvigpio_fops);
+	ret = cdev_add(&lvigpio_cdev, dev_num, 1);
+	if (ret)
+		goto err_unregister;
+
+	lvigpio_class = class_create(THIS_MODULE, CLASS_NAME);
+	if (IS_ERR(lvigpio_class)) {
+		ret = PTR_ERR(lvigpio_class);
+		goto err_cdev;
+	}
+
+	lvigpio_device =
+		device_create(lvigpio_class, NULL, dev_num, NULL, DEVICE_NAME);
+	if (IS_ERR(lvigpio_device)) {
+		ret = PTR_ERR(lvigpio_device);
+		goto err_class;
+	}
+
+	platform_set_drvdata(pdev, lvigpio_data);
+
+	dev_info(&pdev->dev, "lvigpio probed successfully\n");
+	return 0;
+
+err_class:
+	class_destroy(lvigpio_class);
+err_cdev:
+	cdev_del(&lvigpio_cdev);
+err_unregister:
+	unregister_chrdev_region(dev_num, 1);
+	return ret;
+}
+
+static int lvigpio_remove(struct platform_device *pdev)
+{
+	device_destroy(lvigpio_class, dev_num);
+	class_destroy(lvigpio_class);
+	cdev_del(&lvigpio_cdev);
+	unregister_chrdev_region(dev_num, 1);
+	return 0;
+}
+
+static const struct of_device_id lvigpio_dt_ids[] = {
+	{
+		.compatible = "lvi,lvigpio",
+	},
+	{}
+};
+MODULE_DEVICE_TABLE(of, lvigpio_dt_ids);
+
+static struct platform_driver lvigpio_driver = {
     .driver = {
-        .name = "tca6416",
-        .of_match_table = tca6416_of_match,
+        .name = DEVICE_NAME,
+        .of_match_table = lvigpio_dt_ids,
     },
-    .probe = tca6416_probe,
-    .remove = tca6416_remove,
+    .probe = lvigpio_probe,
+    .remove = lvigpio_remove,
 };
 
-// Register the driver
-module_i2c_driver(tca6416_driver);
+module_platform_driver(lvigpio_driver);
 
-MODULE_AUTHOR("Max Borglowe");
-MODULE_DESCRIPTION("TCA6416 GPIO Expander Driver");
 MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Max Borglowe");
+MODULE_DESCRIPTION("Driver for handling GPIOs on LVIs platform");
