@@ -1,0 +1,4 @@
+config CONFIG_LVICONFIG
+    bool "LVI Config Library"
+    help
+      Generic library for LVI system configuration used across kernel components

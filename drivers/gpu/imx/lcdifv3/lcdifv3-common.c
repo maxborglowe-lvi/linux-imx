@@ -29,11 +29,15 @@
 #include <linux/device.h>
 #include <linux/miscdevice.h>
 
+#include "../lib/lviconfig/lviconfig_parameters.h"
+
 #define DRIVER_NAME "imx-lcdifv3"
 #define DEVICE_NAME "lvicolor"
 
 static int lcdifv3_major;
 static struct class *lcdifv3_class;
+
+static uint8_t lcdifv3_config_initialized = 0;
 
 struct lcdifv3_csc_params {
 	int brightness;
@@ -59,8 +63,9 @@ int color_matrix[3][4] = {
 };
 
 static int imx_lcdifv3_ioctl_create(void);
-void build_color_matrix(int matrix[3][4], int brightness, int contrast,
-			int saturation, int r_gain, int g_gain, int b_gain);
+void lcdifv3_build_color_matrix(int matrix[3][4], int brightness, int contrast,
+				int saturation, int r_gain, int g_gain,
+				int b_gain);
 void lcdifv3_config_rgb_to_ycbcr(void __iomem *base, int matrix[3][4]);
 
 struct lcdifv3_soc {
@@ -721,45 +726,57 @@ static void imx_lcdifv3_of_parse_thres(struct lcdifv3_soc *lcdifv3)
 static long lcdifv3_ioctl(struct file *file, unsigned int cmd,
 			  unsigned long arg)
 {
-	printk(KERN_INFO "lcdifv3_ioctl: called with cmd=0x%x\n", cmd);
+	pr_info("[%s] lcdifv3_ioctl: called with cmd=0x%x\n", __func__, cmd);
 
 	struct lcdifv3_csc_params csc_params;
 	struct lcdifv3_soc *lcdifv3 = file->private_data;
 	int ret = 0;
 
 	// Print pointers properly
-	printk(KERN_INFO "lcdifv3_ioctl: lcdifv3=%px, lcdifv3->base=%px\n",
-	       lcdifv3, lcdifv3 ? lcdifv3->base : NULL);
+	pr_info("[%s] lcdifv3_ioctl: lcdifv3=%px, lcdifv3->base=%px\n",
+		__func__, lcdifv3, lcdifv3 ? lcdifv3->base : NULL);
 
 	switch (cmd) {
 	case LCDIFV3_IOC_SET_CSC:
-		printk(KERN_INFO
-		       "lcdifv3_ioctl: LCDIFV3_IOC_SET_CSC received\n");
+		pr_info("[%s] lcdifv3_ioctl: LCDIFV3_IOC_SET_CSC received\n",
+			__func__);
 
 		if (copy_from_user(&csc_params,
 				   (struct lcdifv3_csc_params *)arg,
 				   sizeof(struct lcdifv3_csc_params))) {
-			printk(KERN_ERR
-			       "lcdifv3_ioctl: copy_from_user failed\n");
+			pr_err("[%s] lcdifv3_ioctl: copy_from_user failed\n",
+			       __func__);
 			ret = -EFAULT;
 			break;
 		}
 
-		build_color_matrix(color_matrix, csc_params.brightness,
-				   csc_params.contrast, csc_params.saturation,
-				   csc_params.r_gain, csc_params.g_gain,
-				   csc_params.b_gain);
-		printk(KERN_INFO "lcdifv3_ioctl: Color matrix calculated.\n");
+		ConfigParam_ParseEEPROM();
+		ConfigParam_PrintAll();
+
+		csc_params.brightness = *(confMonitorMode[0].Brightness.data);
+		csc_params.contrast = *(confMonitorMode[0].Contrast.data);
+		csc_params.saturation = *(confMonitorMode[0].Saturation.data);
+		csc_params.r_gain = *(confMonitorMode[0].ColorGainR.data);
+		csc_params.g_gain = *(confMonitorMode[0].ColorGainG.data);
+		csc_params.b_gain = *(confMonitorMode[0].ColorGainB.data);
+
+		lcdifv3_build_color_matrix(color_matrix, csc_params.brightness,
+					   csc_params.contrast,
+					   csc_params.saturation,
+					   csc_params.r_gain, csc_params.g_gain,
+					   csc_params.b_gain);
+		pr_info("[%s] lcdifv3_ioctl: Color matrix calculated.\n",
+			__func__);
 
 		lcdifv3_config_rgb_to_ycbcr(lcdifv3->base, color_matrix);
-		printk(KERN_INFO "lcdifv3_ioctl: CSC registers configured.\n");
+		pr_info("[%s] lcdifv3_ioctl: CSC registers configured.\n",
+			__func__);
 
 		break;
 
 	default:
-		printk(KERN_WARNING
-		       "lcdifv3_ioctl: Unknown ioctl command: 0x%x\n",
-		       cmd);
+		pr_err("[%s] lcdifv3_ioctl: Unknown ioctl command: 0x%x\n",
+		       __func__, cmd);
 		ret = -ENOTTY;
 		break;
 	}
@@ -774,14 +791,14 @@ static int lcdifv3_open(struct inode *inode, struct file *file)
 	/* miscdevice is embedded in lcdifv3_soc */
 	lcdifv3 = container_of(misc, struct lcdifv3_soc, misc);
 	if (!lcdifv3) {
-		printk(KERN_ERR "lcdifv3_open: no context\n");
+		pr_err("[%s] lcdifv3_open: no context\n", __func__);
 		return -ENODEV;
 	}
 
 	/* now stash the real context pointer for ioctl() */
 	file->private_data = lcdifv3;
 
-	printk(KERN_INFO "lcdifv3_open: got base=%px\n", lcdifv3->base);
+	pr_info("[%s] lcdifv3_open: got base=%px\n", __func__, lcdifv3->base);
 	return 0;
 }
 
@@ -792,7 +809,7 @@ static int lcdifv3_release(struct inode *inode, struct file *file)
 
 // static int lcdifv3_remove(struct inode *inode, struct file *file)
 // {
-// 	pr_info("lcdifv3: ioctl remove call\n");
+// 	pr_info("[%s] lcdifv3: ioctl remove call\n", __func__);
 
 // 		return 0;
 // }
@@ -957,7 +974,7 @@ static int imx_lcdifv3_remove(struct platform_device *pdev)
 #define GAIN_TO_FP(x) ((x) * 2) // Scale 0-128-255 to 0-256-510 fixed point
 
 /**
- * build_color_matrix - Build a color correction matrix with RGB gains
+ * lcdifv3_build_color_matrix - Build a color correction matrix with RGB gains
  * @matrix: 3x4 transformation matrix to fill
  * @brightness: Brightness adjustment [0-255], 128 is neutral
  * @contrast: Contrast adjustment [0-255], 128 is neutral (1.0x)
@@ -969,10 +986,11 @@ static int imx_lcdifv3_remove(struct platform_device *pdev)
  * This function builds a color correction matrix for adjusting brightness,
  * contrast, saturation and individual RGB channel gains.
  */
-void build_color_matrix(int matrix[3][4], int brightness, int contrast,
-			int saturation, int r_gain, int g_gain, int b_gain)
+void lcdifv3_build_color_matrix(int matrix[3][4], int brightness, int contrast,
+				int saturation, int r_gain, int g_gain,
+				int b_gain)
 {
-	printk("lcdifv3_build_color_matrix: setting color matrix\n");
+	pr_info("[%s] Setting color matrix\n", __func__);
 	// Convert parameters to fixed-point representation (all integer math)
 	int b_fp = brightness - 128; // -128 to 127
 	int c_fp = CONTRAST_TO_FP(
@@ -1021,6 +1039,8 @@ void build_color_matrix(int matrix[3][4], int brightness, int contrast,
 	matrix[2][2] =
 		FP_MUL(FP_MUL(c_fp, (bw + s_fp)), b_gain_fp); // B←B with gain
 	matrix[2][3] = b_offset; // B offset
+
+	pr_info("[%s] Color matrix set!\n", __func__);
 }
 
 // Function to apply the color matrix to the CSC registers
@@ -1087,7 +1107,8 @@ static int imx_lcdifv3_ioctl_create(void)
 		//register character device
 		lcdifv3_major = register_chrdev(0, DEVICE_NAME, &fops);
 		if (lcdifv3_major < 0) {
-			pr_err("Failed to register character device\n");
+			pr_err("[%s] Failed to register character device\n",
+			       __func__);
 			ret = lcdifv3_major;
 		}
 
@@ -1139,10 +1160,33 @@ static int imx_lcdifv3_runtime_resume(struct device *dev)
 	imx_lcdifv3_ioctl_create();
 
 	// Print pointers properly
-	printk(KERN_INFO "lcdifv3_ioctl: lcdifv3=%px, lcdifv3->base=%px\n",
-	       lcdifv3, lcdifv3 ? lcdifv3->base : NULL);
+	pr_info("[%s] lcdifv3=%px, lcdifv3->base=%px\n", __func__, lcdifv3,
+		lcdifv3 ? lcdifv3->base : NULL);
 
-	build_color_matrix(color_matrix, 128, 128, 128, 128, 128, 128);
+	if (!lcdifv3_config_initialized) {
+		/* Initialize color matrix */
+		ConfigParam_InitAll();
+		ConfigParam_ParseEEPROM();
+		ConfigParam_PrintAll();
+		lcdifv3_config_initialized = 1;
+		pr_info("[%s] Configuration parameters initialized!\n",
+			__func__);
+	}
+
+	struct lcdifv3_csc_params csc_params;
+
+	csc_params.brightness = *(confMonitorMode[0].Brightness.data);
+	csc_params.contrast = *(confMonitorMode[0].Contrast.data);
+	csc_params.saturation = *(confMonitorMode[0].Saturation.data);
+	csc_params.r_gain = *(confMonitorMode[0].ColorGainR.data);
+	csc_params.g_gain = *(confMonitorMode[0].ColorGainG.data);
+	csc_params.b_gain = *(confMonitorMode[0].ColorGainB.data);
+
+	lcdifv3_build_color_matrix(color_matrix, csc_params.brightness,
+				   csc_params.contrast, csc_params.saturation,
+				   csc_params.r_gain, csc_params.g_gain,
+				   csc_params.b_gain);
+	pr_info("[%s] lcdifv3_ioctl: Color matrix calculated.\n", __func__);
 	lcdifv3_config_rgb_to_ycbcr(lcdifv3->base, color_matrix);
 	dev_info(lcdifv3->dev, "CSC0_CTRL after resume = 0x%08x\n",
 		 readl(lcdifv3->base + LCDIFV3_CSC0_CTRL));
