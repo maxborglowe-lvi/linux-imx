@@ -50,6 +50,8 @@ struct lcdifv3_csc_params {
 #define LCDIFV3_IOC_MAGIC 'L'
 #define LCDIFV3_IOC_SET_CSC                                                    \
 	_IOW(LCDIFV3_IOC_MAGIC, 1, struct lcdifv3_csc_params)
+#define LCDIFV3_IOC_GET_CSC                                                    \
+	_IOR(LCDIFV3_IOC_MAGIC, 2, struct lcdifv3_csc_params)
 
 #define LCDIF2_BASE_ADDR 0x32e90000
 
@@ -745,9 +747,6 @@ static long lcdifv3_ioctl(struct file *file, unsigned int cmd,
 			break;
 		}
 
-		ConfigParam_ParseEEPROM();
-		ConfigParam_PrintAll();
-
 		csc_params.brightness = *(confMonitorMode[0].Brightness.data);
 		csc_params.contrast = *(confMonitorMode[0].Contrast.data);
 		csc_params.saturation = *(confMonitorMode[0].Saturation.data);
@@ -1145,9 +1144,6 @@ static int imx_lcdifv3_runtime_resume(struct device *dev)
 
 	if (!lcdifv3_config_initialized) {
 		/* Initialize color matrix */
-		ConfigParam_InitAll();
-		ConfigParam_ParseEEPROM();
-		ConfigParam_PrintAll();
 		lcdifv3_config_initialized = 1;
 		pr_info("[%s] Configuration parameters initialized!\n",
 			__func__);

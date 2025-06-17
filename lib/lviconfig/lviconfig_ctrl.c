@@ -29,6 +29,15 @@
 #define IOCTL_WRITE_DATA _IOW('e', 1, struct eeprom_data)
 #define IOCTL_READ_DATA _IOR('e', 2, struct eeprom_data)
 
+struct lviconfig_mediator {
+	char *param_string;
+	void *data;
+};
+
+#define IOCTL_SET_CONFIG_PARAM _IOW('C', 3, struct lviconfig_mediator)
+#define IOCTL_GET_CONFIG_PARAM _IOR('C', 4, struct lviconfig_mediator)
+#define IOCTL_SET_CONFIG_PARAM_EEPROM _IOW('C', 5, struct lviconfig_mediator)
+
 static int major;
 static struct i2c_client *i2c_client_g;
 static struct class *lviconfig_class;
@@ -168,139 +177,94 @@ MODULE_DEVICE_TABLE(of, lviconfig_of_match);
 static long lviconfig_ioctl(struct file *file, unsigned int cmd,
 			    unsigned long arg)
 {
-	uint8_t buf32[5]; /**< Buffer for 32-bit addressing of EEPROM (4 address bytes, 1 data byte) */
-	uint8_t buf16[3]; /**< Buffer for 16-bit addressing of EEPROM (2 address bytes, 1 data byte) */
-	uint8_t buf8[2]; /**< Buffer for 8-bit addressing of EEPROM (1 address byte, 1 data byte) */
-	struct i2c_msg msgs[2]; /**< I2C message array for transaction */
-	int ret; /**< Return value for I2C transfer */
+	int ret;
 
-	uint8_t addr_cell, addr_sub;
+	ConfigParam *param;
 
-	struct eeprom_data
-		data; /**< Data structure for the current IOCTL operation */
+	struct lviconfig_mediator
+		mediator; /**< Mediator structure for config parameters */
 
-	if (copy_from_user(&data, (struct eeprom_data *)arg,
-			   sizeof(struct eeprom_data))) {
+	if (copy_from_user(&mediator, (struct lviconfig_mediator *)arg,
+			   sizeof(struct lviconfig_mediator))) {
 		return -EFAULT;
 	}
 
-	// Prevent writing to addresses larger than the amount of available EEPROM subaddresses
-	if (data.reg >= EEPROM_SUBADDRESSES) {
-		pr_err("[%s] Address 0x%08X is out of range\n", __func__,
-		       data.reg);
-		return -EINVAL;
-	}
-
 	switch (cmd) {
-	case IOCTL_WRITE_DATA:
-
-		switch (reg_size) {
-		case REG_SIZE_8:
-			addr_cell =
-				data.reg /
-				EEPROM_CELL_SIZE; // Calculate the cell address
-			addr_sub = data.reg %
-				   EEPROM_CELL_SIZE; // Calculate the subaddress
-
-			pr_info("[%s] Writing to reg 0x%02X data 0x%02X\n",
-				__func__, addr_sub, data.data);
-			buf8[0] = data.reg; // 8-bit register address
-			buf8[1] = data.data; // Data to write
-			msgs[0].buf = buf8;
-			msgs[0].len = 2;
-			break;
-		case REG_SIZE_16:
-			pr_info("[%s] Writing to reg 0x%04X data 0x%02X\n",
-				__func__, data.reg, data.data);
-			buf16[0] = (data.reg >> 8) &
-				   0xff; // MSB of 16-bit register address
-			buf16[1] = data.reg &
-				   0xff; // LSB of 16-bit register address
-			buf16[2] = data.data;
-			msgs[0].buf = buf16;
-			msgs[0].len = 3;
-			break;
-		case REG_SIZE_32:
-			pr_info("[%s] Writing to reg 0x%08X data 0x%02X\n",
-				__func__, data.reg, data.data);
-			buf32[0] = (data.reg >> 24) &
-				   0xff; // MSB of 32-bit register address
-			buf32[1] = (data.reg >> 16) & 0xff;
-			buf32[2] = (data.reg >> 8) & 0xff;
-			buf32[3] = data.reg &
-				   0xff; // LSB of 32-bit register address
-			buf32[4] = data.data; // Data to write
-			msgs[0].buf = buf32;
-			msgs[0].len = 5;
-			break;
-		default:
-			break;
+	case IOCTL_SET_CONFIG_PARAM:
+		if (mediator.param_string == NULL) {
+			return -EINVAL; // Invalid parameter string
 		}
-		// Set the I2C address and flags for the message
-		msgs[0].addr = i2c_client_g->addr + addr_cell;
-		msgs[0].flags = 0;
-
-		ret = i2c_transfer(i2c_client_g->adapter, msgs, 1);
-		if (ret < 0) {
-			pr_err("[%s] Failed to write to the EEPROM\n",
-			       __func__);
-			return -EIO;
+		if (mediator.data == NULL) {
+			return -EINVAL; // Invalid data pointer
 		}
+		pr_info("[%s]: called with param_string: %s\n", __func__,
+			mediator.param_string);
 
-		msleep(1); // 10 milliseconds delay to ensure EEPROM is ready
+		param = ConfigParam_FindByName(mediator.param_string);
 
-		break;
+		param->data =
+			mediator.data; // Set the data pointer for the parameter
 
-	case IOCTL_READ_DATA:
-		if (reg_size == REG_SIZE_8) {
-			pr_info("[%s] Reading from reg 0x%02X\n", __func__,
-				data.reg);
-
-			buf8[0] = data.reg; // 8-bit register address
-
-			msgs[0].addr = i2c_client_g->addr;
-			msgs[0].flags = 0;
-			msgs[0].len = 1;
-			msgs[0].buf = buf8;
-
-			msgs[1].addr = i2c_client_g->addr;
-			msgs[1].flags = I2C_M_RD;
-			msgs[1].len = 1;
-			msgs[1].buf = &data.data;
-		} else if (reg_size == REG_SIZE_16) {
-			pr_info("[%s] Reading from reg 0x%04X\n", __func__,
-				data.reg);
-
-			buf16[0] = (data.reg >> 8) & 0xff; // MSB
-			buf16[1] = data.reg & 0xff; // LSB
-
-			msgs[0].addr = i2c_client_g->addr;
-			msgs[0].flags = 0;
-			msgs[0].len = 2;
-			msgs[0].buf = buf16;
-
-			msgs[1].addr = i2c_client_g->addr;
-			msgs[1].flags = I2C_M_RD;
-			msgs[1].len = 1;
-			msgs[1].buf = &data.data;
-		}
-
-		ret = i2c_transfer(i2c_client_g->adapter, msgs, 2);
-		if (ret < 0) {
-			pr_err("[%s] Failed to read from the EEPROM\n",
-			       __func__);
-			return -EIO;
-		}
-
-		if (copy_to_user((struct eeprom_data *)arg, &data,
-				 sizeof(struct eeprom_data))) {
-			return -EFAULT;
+		if (!param) {
+			pr_err("[%s]: Parameter not found: %s\n", __func__,
+			       mediator.param_string);
+			return -ENOENT; // Parameter not found
 		}
 
 		break;
+	case IOCTL_SET_CONFIG_PARAM_EEPROM:
+		if (mediator.param_string == NULL) {
+			return -EINVAL; // Invalid parameter string
+		}
+		if (mediator.data == NULL) {
+			return -EINVAL; // Invalid data pointer
+		}
+		pr_info("[%s]: called with param_string: %s\n", __func__,
+			mediator.param_string);
 
+		param = ConfigParam_FindByName(mediator.param_string);
+
+		if (!param) {
+			pr_err("[%s]: Parameter not found: %s\n", __func__,
+			       mediator.param_string);
+			return -ENOENT; // Parameter not found
+		}
+
+		ConfigParam_SetData(
+			param, mediator.data); // Set the data for the parameter
+
+		break;
+
+	case IOCTL_GET_CONFIG_PARAM:
+
+		if (mediator.param_string == NULL) {
+			return -EINVAL; // Invalid parameter string
+		}
+		if (mediator.data == NULL) {
+			return -EINVAL; // Invalid data pointer
+		}
+		pr_info("[%s]: called with param_string: %s\n", __func__,
+			mediator.param_string);
+
+		param = ConfigParam_FindByName(mediator.param_string);
+
+		if (!param) {
+			pr_err("[%s]: Parameter not found: %s\n", __func__,
+			       mediator.param_string);
+			return -ENOENT; // Parameter not found
+		}
+
+		memcpy(mediator.data, param->data,
+		       param->size); // Copy the data to user space
+
+		if (copy_to_user((struct lviconfig_mediator *)arg, &mediator,
+				 sizeof(struct lviconfig_mediator))) {
+			return -EFAULT; // Copy to user space failed
+		}
+
+		break;
 	default:
-		return -EINVAL;
+		break;
 	}
 
 	return 0;
@@ -328,7 +292,6 @@ static int lviconfig_probe(struct i2c_client *client,
 			   const struct i2c_device_id *id)
 {
 	int ret; // For return values
-	const struct firmware *fw_entry = NULL;
 
 	pr_info("[%s]: probe called for I2C client at addr 0x%x\n", __func__,
 		client->addr);
@@ -360,13 +323,15 @@ static int lviconfig_probe(struct i2c_client *client,
 		return -ENODEV; // Use a standard error code
 	}
 
-	// pr_info("[%s]: Character device created successfully.\n", __func__);
+	pr_info("[%s]: Character device created successfully.\n", __func__);
 
 	// Initialize parameter structures and their EEPROM addresses
-	// ConfigParam_InitAll();
-	// pr_info("[%s]: ConfigParam structures initialized.\n", __func__);
+	ConfigParam_InitAll();
+	pr_info("[%s]: ConfigParam structures initialized.\n", __func__);
 
-	// ConfigParam_ParseEEPROM(); // Read existing EEPROM content into parameters
+	ConfigParam_ParseEEPROM(); // Read existing EEPROM content into parameters
+	pr_info("[%s]: ConfigParam structures populated from EEPROM.\n",
+		__func__);
 
 	// ConfigParam_PrintAll();
 
@@ -427,4 +392,3 @@ MODULE_AUTHOR("Max Borglowe");
 MODULE_DESCRIPTION(
 	"EEPROM I2C driver kernel module with integrated config parsing");
 MODULE_VERSION("1.1");
-MODULE_FIRMWARE("lviconfig.conf");
