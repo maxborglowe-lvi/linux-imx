@@ -8,7 +8,4 @@
 #include <linux/device.h>
 #include <linux/of.h>
 #include <linux/delay.h>
-#include <linux/firmware.h> // Required for firmware loading
-
-int platform_eeprom_read(uint32_t reg, uint8_t *data_val);
-int platform_eeprom_write(uint32_t reg, uint8_t data_val);
+#include "lviconfig_parameters.h"
