@@ -48,10 +48,8 @@ struct lcdifv3_csc_params {
 };
 
 #define LCDIFV3_IOC_MAGIC 'L'
-#define LCDIFV3_IOC_SET_CSC                                                    \
-	_IOW(LCDIFV3_IOC_MAGIC, 1, struct lcdifv3_csc_params)
-#define LCDIFV3_IOC_GET_CSC                                                    \
-	_IOR(LCDIFV3_IOC_MAGIC, 2, struct lcdifv3_csc_params)
+#define LCDIFV3_IOC_SET_CSC _IOW(LCDIFV3_IOC_MAGIC, 1, struct lcdifv3_csc_params)
+#define LCDIFV3_IOC_GET_CSC _IOR(LCDIFV3_IOC_MAGIC, 2, struct lcdifv3_csc_params)
 
 #define LCDIF2_BASE_ADDR 0x32e90000
 
@@ -64,9 +62,7 @@ int color_matrix[3][4] = {
 };
 
 static int imx_lcdifv3_ioctl_create(void);
-void lcdifv3_build_color_matrix(int matrix[3][4], int brightness, int contrast,
-				int saturation, int r_gain, int g_gain,
-				int b_gain);
+void lcdifv3_build_color_matrix(int matrix[3][4], int brightness, int contrast, int saturation, int r_gain, int g_gain, int b_gain);
 void lcdifv3_config_rgb_to_ycbcr(void __iomem *base, int matrix[3][4]);
 
 struct lcdifv3_soc {
@@ -125,21 +121,19 @@ static struct lcdifv3_soc_pdata imx8mp_lcdif3_pdata = {
 	.de_invert = false,
 	.hdmimix = true,
 };
-static const struct of_device_id imx_lcdifv3_dt_ids[] = {
-	{
-		.compatible = "fsl,imx8mp-lcdif1",
-		.data = &imx8mp_lcdif1_pdata,
-	},
-	{
-		.compatible = "fsl,imx8mp-lcdif2",
-		.data = &imx8mp_lcdif2_pdata,
-	},
-	{
-		.compatible = "fsl,imx8mp-lcdif3",
-		.data = &imx8mp_lcdif3_pdata,
-	},
-	{ /* sentinel */ }
-};
+static const struct of_device_id imx_lcdifv3_dt_ids[] = { {
+								  .compatible = "fsl,imx8mp-lcdif1",
+								  .data = &imx8mp_lcdif1_pdata,
+							  },
+							  {
+								  .compatible = "fsl,imx8mp-lcdif2",
+								  .data = &imx8mp_lcdif2_pdata,
+							  },
+							  {
+								  .compatible = "fsl,imx8mp-lcdif3",
+								  .data = &imx8mp_lcdif3_pdata,
+							  },
+							  { /* sentinel */ } };
 MODULE_DEVICE_TABLE(of, imx_lcdifv3_dt_ids);
 
 static int lcdifv3_enable_clocks(struct lcdifv3_soc *lcdifv3)
@@ -196,13 +190,10 @@ static void lcdifv3_enable_plane_panic(struct lcdifv3_soc *lcdifv3)
 	 * is 8KB = 512 * 128bit).
 	 * threshold = n * 128bit (n: 0 ~ 511)
 	 */
-	thres_low = DIV_ROUND_UP(511 * lcdifv3->thres_low_mul,
-				 lcdifv3->thres_low_div);
-	thres_high = DIV_ROUND_UP(511 * lcdifv3->thres_high_mul,
-				  lcdifv3->thres_high_div);
+	thres_low = DIV_ROUND_UP(511 * lcdifv3->thres_low_mul, lcdifv3->thres_low_div);
+	thres_high = DIV_ROUND_UP(511 * lcdifv3->thres_high_mul, lcdifv3->thres_high_div);
 
-	panic_thres = PANIC0_THRES_PANIC_THRES_LOW(thres_low) |
-		      PANIC0_THRES_PANIC_THRES_HIGH(thres_high);
+	panic_thres = PANIC0_THRES_PANIC_THRES_LOW(thres_low) | PANIC0_THRES_PANIC_THRES_HIGH(thres_high);
 
 	writel(panic_thres, lcdifv3->base + LCDIFV3_PANIC0_THRES);
 
@@ -213,8 +204,7 @@ static void lcdifv3_enable_plane_panic(struct lcdifv3_soc *lcdifv3)
 	 * and NoC + QoS modules will handle panic
 	 * automatically.
 	 */
-	writel(INT_ENABLE_D1_PLANE_PANIC_EN,
-	       lcdifv3->base + LCDIFV3_INT_ENABLE_D1);
+	writel(INT_ENABLE_D1_PLANE_PANIC_EN, lcdifv3->base + LCDIFV3_INT_ENABLE_D1);
 }
 
 int lcdifv3_vblank_irq_get(struct lcdifv3_soc *lcdifv3)
@@ -288,8 +278,7 @@ static uint32_t lcdifv3_get_bpp_from_fmt(uint32_t format)
  * Get the bus format supported by LCDIF
  * according to drm fourcc format
  */
-int lcdifv3_get_bus_fmt_from_pix_fmt(struct lcdifv3_soc *lcdifv3,
-				     uint32_t format)
+int lcdifv3_get_bus_fmt_from_pix_fmt(struct lcdifv3_soc *lcdifv3, uint32_t format)
 {
 	uint32_t bpp;
 
@@ -390,8 +379,7 @@ void lcdifv3_set_fb_addr(struct lcdifv3_soc *lcdifv3, int id, u32 addr)
 }
 EXPORT_SYMBOL(lcdifv3_set_fb_addr);
 
-void lcdifv3_set_fb_hcrop(struct lcdifv3_soc *lcdifv3, u32 src_w, u32 pitch,
-			  bool crop)
+void lcdifv3_set_fb_hcrop(struct lcdifv3_soc *lcdifv3, u32 src_w, u32 pitch, bool crop)
 {
 	uint32_t ctrldescl0_3 = 0;
 
@@ -420,8 +408,7 @@ EXPORT_SYMBOL(lcdifv3_set_pitch);
 
 void lcdifv3_set_mode(struct lcdifv3_soc *lcdifv3, struct videomode *vmode)
 {
-	const struct of_device_id *of_id =
-		of_match_device(imx_lcdifv3_dt_ids, lcdifv3->dev);
+	const struct of_device_id *of_id = of_match_device(imx_lcdifv3_dt_ids, lcdifv3->dev);
 	const struct lcdifv3_soc_pdata *soc_pdata;
 	u32 disp_size, hsyn_para, vsyn_para, vsyn_hsyn_width, ctrldescl0_1;
 
@@ -435,53 +422,39 @@ void lcdifv3_set_mode(struct lcdifv3_soc *lcdifv3, struct videomode *vmode)
 	clk_prepare_enable(lcdifv3->clk_pix);
 
 	/* config display timings */
-	disp_size = DISP_SIZE_DELTA_Y(vmode->vactive) |
-		    DISP_SIZE_DELTA_X(vmode->hactive);
+	disp_size = DISP_SIZE_DELTA_Y(vmode->vactive) | DISP_SIZE_DELTA_X(vmode->hactive);
 	writel(disp_size, lcdifv3->base + LCDIFV3_DISP_SIZE);
 
 	WARN_ON(!vmode->hback_porch || !vmode->hfront_porch);
-	hsyn_para = HSYN_PARA_BP_H(vmode->hback_porch) |
-		    HSYN_PARA_FP_H(vmode->hfront_porch);
+	hsyn_para = HSYN_PARA_BP_H(vmode->hback_porch) | HSYN_PARA_FP_H(vmode->hfront_porch);
 	writel(hsyn_para, lcdifv3->base + LCDIFV3_HSYN_PARA);
 
 	WARN_ON(!vmode->vback_porch || !vmode->vfront_porch);
-	vsyn_para = VSYN_PARA_BP_V(vmode->vback_porch) |
-		    VSYN_PARA_FP_V(vmode->vfront_porch);
+	vsyn_para = VSYN_PARA_BP_V(vmode->vback_porch) | VSYN_PARA_FP_V(vmode->vfront_porch);
 	writel(vsyn_para, lcdifv3->base + LCDIFV3_VSYN_PARA);
 
 	WARN_ON(!vmode->vsync_len || !vmode->hsync_len);
-	vsyn_hsyn_width = VSYN_HSYN_WIDTH_PW_V(vmode->vsync_len) |
-			  VSYN_HSYN_WIDTH_PW_H(vmode->hsync_len);
+	vsyn_hsyn_width = VSYN_HSYN_WIDTH_PW_V(vmode->vsync_len) | VSYN_HSYN_WIDTH_PW_H(vmode->hsync_len);
 	writel(vsyn_hsyn_width, lcdifv3->base + LCDIFV3_VSYN_HSYN_WIDTH);
 
 	/* config layer size */
 	/* TODO: 32bits alignment for width */
-	ctrldescl0_1 = CTRLDESCL0_1_HEIGHT(vmode->vactive) |
-		       CTRLDESCL0_1_WIDTH(vmode->hactive);
+	ctrldescl0_1 = CTRLDESCL0_1_HEIGHT(vmode->vactive) | CTRLDESCL0_1_WIDTH(vmode->hactive);
 	writel(ctrldescl0_1, lcdifv3->base + LCDIFV3_CTRLDESCL0_1);
 
 	/* Polarities */
 	if (soc_pdata) {
-		if ((soc_pdata->hsync_invert &&
-		     vmode->flags & DISPLAY_FLAGS_HSYNC_HIGH) ||
-		    (!soc_pdata->hsync_invert &&
-		     vmode->flags & DISPLAY_FLAGS_HSYNC_LOW))
+		if ((soc_pdata->hsync_invert && vmode->flags & DISPLAY_FLAGS_HSYNC_HIGH) || (!soc_pdata->hsync_invert && vmode->flags & DISPLAY_FLAGS_HSYNC_LOW))
 			writel(CTRL_INV_HS, lcdifv3->base + LCDIFV3_CTRL_SET);
 		else
 			writel(CTRL_INV_HS, lcdifv3->base + LCDIFV3_CTRL_CLR);
 
-		if ((soc_pdata->vsync_invert &&
-		     vmode->flags & DISPLAY_FLAGS_VSYNC_HIGH) ||
-		    (!soc_pdata->vsync_invert &&
-		     vmode->flags & DISPLAY_FLAGS_VSYNC_LOW))
+		if ((soc_pdata->vsync_invert && vmode->flags & DISPLAY_FLAGS_VSYNC_HIGH) || (!soc_pdata->vsync_invert && vmode->flags & DISPLAY_FLAGS_VSYNC_LOW))
 			writel(CTRL_INV_VS, lcdifv3->base + LCDIFV3_CTRL_SET);
 		else
 			writel(CTRL_INV_VS, lcdifv3->base + LCDIFV3_CTRL_CLR);
 
-		if ((soc_pdata->de_invert &&
-		     vmode->flags & DISPLAY_FLAGS_DE_HIGH) ||
-		    (!soc_pdata->de_invert &&
-		     vmode->flags & DISPLAY_FLAGS_DE_LOW))
+		if ((soc_pdata->de_invert && vmode->flags & DISPLAY_FLAGS_DE_HIGH) || (!soc_pdata->de_invert && vmode->flags & DISPLAY_FLAGS_DE_LOW))
 			writel(CTRL_INV_DE, lcdifv3->base + LCDIFV3_CTRL_SET);
 		else
 			writel(CTRL_INV_DE, lcdifv3->base + LCDIFV3_CTRL_CLR);
@@ -573,11 +546,8 @@ static int hdmimix_lcdif3_setup(struct lcdifv3_soc *lcdifv3)
 	int ret;
 
 	struct clk_bulk_data clocks[] = {
-		{ .id = "mix_apb" },   { .id = "mix_axi" },
-		{ .id = "xtl_24m" },   { .id = "mix_pix" },
-		{ .id = "lcdif_apb" }, { .id = "lcdif_axi" },
-		{ .id = "lcdif_pdi" }, { .id = "lcdif_pix" },
-		{ .id = "lcdif_spu" }, { .id = "noc_hdmi" },
+		{ .id = "mix_apb" },   { .id = "mix_axi" },   { .id = "xtl_24m" },   { .id = "mix_pix" },   { .id = "lcdif_apb" },
+		{ .id = "lcdif_axi" }, { .id = "lcdif_pdi" }, { .id = "lcdif_pix" }, { .id = "lcdif_spu" }, { .id = "noc_hdmi" },
 	};
 
 	/* power up hdmimix lcdif and nor */
@@ -625,8 +595,7 @@ static int lcdifv3_add_client_devices(struct lcdifv3_soc *lcdifv3)
 	for (i = 0; i < ARRAY_SIZE(client_reg); i++) {
 		of_node = of_graph_get_port_by_id(dev->of_node, i);
 		if (!of_node) {
-			dev_info(dev, "no port@%d node in %s\n", i,
-				 dev->of_node->full_name);
+			dev_info(dev, "no port@%d node in %s\n", i, dev->of_node->full_name);
 			continue;
 		}
 		of_node_put(of_node);
@@ -651,8 +620,7 @@ static int lcdifv3_add_client_devices(struct lcdifv3_soc *lcdifv3)
 		 */
 		pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
 
-		ret = platform_device_add_data(pdev, &client_reg[i].pdata,
-					       sizeof(client_reg[i].pdata));
+		ret = platform_device_add_data(pdev, &client_reg[i].pdata, sizeof(client_reg[i].pdata));
 		if (!ret)
 			ret = platform_device_add(pdev);
 		if (ret) {
@@ -711,8 +679,7 @@ static void imx_lcdifv3_of_parse_thres(struct lcdifv3_soc *lcdifv3)
 	ret = of_property_read_u32_array(np, "thres-high", thres_high, 2);
 	if (!ret) {
 		/* check the value effectiveness */
-		ret = imx_lcdifv3_check_thres_value(thres_high[0],
-						    thres_high[1]);
+		ret = imx_lcdifv3_check_thres_value(thres_high[0], thres_high[1]);
 		if (!ret) {
 			lcdifv3->thres_high_mul = thres_high[0];
 			lcdifv3->thres_high_div = thres_high[1];
@@ -720,8 +687,7 @@ static void imx_lcdifv3_of_parse_thres(struct lcdifv3_soc *lcdifv3)
 	}
 }
 
-static long lcdifv3_ioctl(struct file *file, unsigned int cmd,
-			  unsigned long arg)
+static long lcdifv3_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	pr_info("[%s] lcdifv3_ioctl: called with cmd=0x%x\n", __func__, cmd);
 
@@ -730,19 +696,14 @@ static long lcdifv3_ioctl(struct file *file, unsigned int cmd,
 	int ret = 0;
 
 	// Print pointers properly
-	pr_info("[%s] lcdifv3_ioctl: lcdifv3=%px, lcdifv3->base=%px\n",
-		__func__, lcdifv3, lcdifv3 ? lcdifv3->base : NULL);
+	pr_info("[%s] lcdifv3_ioctl: lcdifv3=%px, lcdifv3->base=%px\n", __func__, lcdifv3, lcdifv3 ? lcdifv3->base : NULL);
 
 	switch (cmd) {
 	case LCDIFV3_IOC_SET_CSC:
-		pr_info("[%s] lcdifv3_ioctl: LCDIFV3_IOC_SET_CSC received\n",
-			__func__);
+		pr_info("[%s] lcdifv3_ioctl: LCDIFV3_IOC_SET_CSC received\n", __func__);
 
-		if (copy_from_user(&csc_params,
-				   (struct lcdifv3_csc_params *)arg,
-				   sizeof(struct lcdifv3_csc_params))) {
-			pr_err("[%s] lcdifv3_ioctl: copy_from_user failed\n",
-			       __func__);
+		if (copy_from_user(&csc_params, (struct lcdifv3_csc_params *)arg, sizeof(struct lcdifv3_csc_params))) {
+			pr_err("[%s] lcdifv3_ioctl: copy_from_user failed\n", __func__);
 			ret = -EFAULT;
 			break;
 		}
@@ -754,23 +715,16 @@ static long lcdifv3_ioctl(struct file *file, unsigned int cmd,
 		csc_params.g_gain = *(confMonitorMode[0].ColorGainG.data);
 		csc_params.b_gain = *(confMonitorMode[0].ColorGainB.data);
 
-		lcdifv3_build_color_matrix(color_matrix, csc_params.brightness,
-					   csc_params.contrast,
-					   csc_params.saturation,
-					   csc_params.r_gain, csc_params.g_gain,
-					   csc_params.b_gain);
-		pr_info("[%s] lcdifv3_ioctl: Color matrix calculated.\n",
-			__func__);
+		lcdifv3_build_color_matrix(color_matrix, csc_params.brightness, csc_params.contrast, csc_params.saturation, csc_params.r_gain, csc_params.g_gain, csc_params.b_gain);
+		pr_info("[%s] lcdifv3_ioctl: Color matrix calculated.\n", __func__);
 
 		lcdifv3_config_rgb_to_ycbcr(lcdifv3->base, color_matrix);
-		pr_info("[%s] lcdifv3_ioctl: CSC registers configured.\n",
-			__func__);
+		pr_info("[%s] lcdifv3_ioctl: CSC registers configured.\n", __func__);
 
 		break;
 
 	default:
-		pr_err("[%s] lcdifv3_ioctl: Unknown ioctl command: 0x%x\n",
-		       __func__, cmd);
+		pr_err("[%s] lcdifv3_ioctl: Unknown ioctl command: 0x%x\n", __func__, cmd);
 		ret = -ENOTTY;
 		break;
 	}
@@ -886,6 +840,23 @@ static int imx_lcdifv3_probe(struct platform_device *pdev)
 
 static int imx_lcdifv3_remove(struct platform_device *pdev)
 {
+	pr_info("[%s] remove call\n", __func__);
+
+	if (lcdifv3_ioctl_is_created) {
+		// Cleanup: Destroy device and class, unregister char device
+		device_destroy(lcdifv3_class, MKDEV(lcdifv3_major, 0));
+		class_destroy(lcdifv3_class);
+		unregister_chrdev(lcdifv3_major, DEVICE_NAME);
+
+		lcdifv3_ioctl_is_created = 0;
+	}
+
+	struct lcdifv3_soc *lcdifv3 = platform_get_drvdata(pdev);
+
+	/* undo misc so no leaks */
+	if (lcdifv3->misc.name)
+		misc_deregister(&lcdifv3->misc);
+
 	pm_runtime_disable(&pdev->dev);
 
 	return 0;
@@ -903,8 +874,8 @@ static int imx_lcdifv3_remove(struct platform_device *pdev)
 
 // Direct conversion for input values to fixed point (no floats)
 #define CONTRAST_TO_FP(x) ((x) * 2) // Scale 0-128-255 to 0-256-510 fixed point
-#define SATURATION_TO_FP(x)                                                    \
-	((x) * 2) // Scale 0-128-255 to 0-256-510 fixed point
+#define SATURATION_TO_FP(x) ((x) * 2) // Scale 0-128-255 to 0-256-510 fixed point
+#define GAIN_TO_FP(x) ((x) * 2) // Scale 0-128-255 to 0-256-510 fixed point
 
 /**
  * lcdifv3_build_color_matrix - Build a color correction matrix with RGB gains
@@ -919,17 +890,16 @@ static int imx_lcdifv3_remove(struct platform_device *pdev)
  * This function builds a color correction matrix for adjusting brightness,
  * contrast, saturation and individual RGB channel gains.
  */
-void lcdifv3_build_color_matrix(int matrix[3][4], int brightness, int contrast,
-				int saturation, int r_gain, int g_gain,
-				int b_gain)
+void lcdifv3_build_color_matrix(int matrix[3][4], int brightness, int contrast, int saturation, int r_gain, int g_gain, int b_gain)
 {
 	pr_info("[%s] Setting color matrix\n", __func__);
 	// Convert parameters to fixed-point representation (all integer math)
 	int b_fp = brightness - 128; // -128 to 127
-	int c_fp = CONTRAST_TO_FP(
-		contrast); // 0 to 510 (0.0 to 2.0 in fixed point)
-	int s_fp = SATURATION_TO_FP(
-		saturation); // 0 to 510 (0.0 to 2.0 in fixed point)
+	int c_fp = CONTRAST_TO_FP(contrast); // 0 to 510 (0.0 to 2.0 in fixed point)
+	int s_fp = SATURATION_TO_FP(saturation); // 0 to 510 (0.0 to 2.0 in fixed point)
+	int r_gain_fp = GAIN_TO_FP(r_gain); // 0 to 510 (0.0 to 2.0 in fixed point)
+	int g_gain_fp = GAIN_TO_FP(g_gain); // 0 to 510 (0.0 to 2.0 in fixed point)
+	int b_gain_fp = GAIN_TO_FP(b_gain); // 0 to 510 (0.0 to 2.0 in fixed point)
 
 	// Compute inverse saturation (1.0 - saturation) in fixed point
 	int inv_s_fp = 256 - s_fp; // 256 = 1.0 in fixed point
@@ -947,21 +917,21 @@ void lcdifv3_build_color_matrix(int matrix[3][4], int brightness, int contrast,
 
 	// RGB transform rows
 	// R row
-	matrix[0][0] = FP_MUL(c_fp, (rw + s_fp)); // R←R
+	matrix[0][0] = FP_MUL(FP_MUL(c_fp, (rw + s_fp)), r_gain_fp); // R←R with gain
 	matrix[0][1] = FP_MUL(c_fp, gw); // R←G
 	matrix[0][2] = FP_MUL(c_fp, bw); // R←B
 	matrix[0][3] = b_offset; // R offset
 
 	// G row
 	matrix[1][0] = FP_MUL(c_fp, rw); // G←R
-	matrix[1][1] = FP_MUL(c_fp, (gw + s_fp)); // G←G
+	matrix[1][1] = FP_MUL(FP_MUL(c_fp, (gw + s_fp)), g_gain_fp); // G←G with gain
 	matrix[1][2] = FP_MUL(c_fp, bw); // G←B
 	matrix[1][3] = b_offset; // G offset
 
 	// B row
 	matrix[2][0] = FP_MUL(c_fp, rw); // B←R
 	matrix[2][1] = FP_MUL(c_fp, gw); // B←G
-	matrix[2][2] = FP_MUL(c_fp, (bw + s_fp)); // B←B
+	matrix[2][2] = FP_MUL(FP_MUL(c_fp, (bw + s_fp)), b_gain_fp); // B←B with gain
 	matrix[2][3] = b_offset; // B offset
 
 	pr_info("[%s] Color matrix set!\n", __func__);
@@ -1005,6 +975,8 @@ void lcdifv3_config_rgb_to_ycbcr(void __iomem *base, int matrix[3][4])
 	writel(v, base + LCDIFV3_CSC0_COEF5);
 
 	mb();
+
+	pr_info("[%s] configuring coeff registers with RGB-YCbCr values.\n", __func__);
 }
 
 // #define FP8(x) ((int32_t)((x) * 256.0 + ((x) > 0 ? 0.5 : -0.5)))
@@ -1082,8 +1054,7 @@ static int imx_lcdifv3_ioctl_create(void)
 		//register character device
 		lcdifv3_major = register_chrdev(0, DEVICE_NAME, &fops);
 		if (lcdifv3_major < 0) {
-			pr_err("[%s] Failed to register character device\n",
-			       __func__);
+			pr_err("[%s] Failed to register character device\n", __func__);
 			ret = lcdifv3_major;
 		}
 
@@ -1095,8 +1066,7 @@ static int imx_lcdifv3_ioctl_create(void)
 		}
 
 		// Create the device node
-		if (device_create(lcdifv3_class, NULL, MKDEV(lcdifv3_major, 0),
-				  NULL, DEVICE_NAME) == NULL) {
+		if (device_create(lcdifv3_class, NULL, MKDEV(lcdifv3_major, 0), NULL, DEVICE_NAME) == NULL) {
 			class_destroy(lcdifv3_class);
 			unregister_chrdev(lcdifv3_major, DEVICE_NAME);
 			ret = -1;
@@ -1139,14 +1109,12 @@ static int imx_lcdifv3_runtime_resume(struct device *dev)
 	imx_lcdifv3_ioctl_create();
 
 	// Print pointers properly
-	pr_info("[%s] lcdifv3=%px, lcdifv3->base=%px\n", __func__, lcdifv3,
-		lcdifv3 ? lcdifv3->base : NULL);
+	pr_info("[%s] lcdifv3=%px, lcdifv3->base=%px\n", __func__, lcdifv3, lcdifv3 ? lcdifv3->base : NULL);
 
 	if (!lcdifv3_config_initialized) {
 		/* Initialize color matrix */
 		lcdifv3_config_initialized = 1;
-		pr_info("[%s] Configuration parameters initialized!\n",
-			__func__);
+		pr_info("[%s] Configuration parameters initialized!\n", __func__);
 	}
 
 	struct lcdifv3_csc_params csc_params;
@@ -1158,14 +1126,10 @@ static int imx_lcdifv3_runtime_resume(struct device *dev)
 	csc_params.g_gain = *(confMonitorMode[0].ColorGainG.data);
 	csc_params.b_gain = *(confMonitorMode[0].ColorGainB.data);
 
-	lcdifv3_build_color_matrix(color_matrix, csc_params.brightness,
-				   csc_params.contrast, csc_params.saturation,
-				   csc_params.r_gain, csc_params.g_gain,
-				   csc_params.b_gain);
+	lcdifv3_build_color_matrix(color_matrix, csc_params.brightness, csc_params.contrast, csc_params.saturation, csc_params.r_gain, csc_params.g_gain, csc_params.b_gain);
 	pr_info("[%s] lcdifv3_ioctl: Color matrix calculated.\n", __func__);
 	lcdifv3_config_rgb_to_ycbcr(lcdifv3->base, color_matrix);
-	dev_info(lcdifv3->dev, "CSC0_CTRL after resume = 0x%08x\n",
-		 readl(lcdifv3->base + LCDIFV3_CSC0_CTRL));
+	dev_info(lcdifv3->dev, "CSC0_CTRL after resume = 0x%08x\n", readl(lcdifv3->base + LCDIFV3_CSC0_CTRL));
 
 	/* enable plane FIFO panic */
 	lcdifv3_enable_plane_panic(lcdifv3);
@@ -1186,11 +1150,8 @@ static int imx_lcdifv3_resume(struct device *dev)
 }
 #endif
 
-static const struct dev_pm_ops imx_lcdifv3_pm_ops = {
-	SET_LATE_SYSTEM_SLEEP_PM_OPS(imx_lcdifv3_suspend, imx_lcdifv3_resume)
-		SET_RUNTIME_PM_OPS(imx_lcdifv3_runtime_suspend,
-				   imx_lcdifv3_runtime_resume, NULL)
-};
+static const struct dev_pm_ops imx_lcdifv3_pm_ops = { SET_LATE_SYSTEM_SLEEP_PM_OPS(imx_lcdifv3_suspend, imx_lcdifv3_resume)
+							      SET_RUNTIME_PM_OPS(imx_lcdifv3_runtime_suspend, imx_lcdifv3_runtime_resume, NULL) };
 
 struct platform_driver imx_lcdifv3_driver = {
 	.probe = imx_lcdifv3_probe,

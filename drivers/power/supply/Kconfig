@@ -898,6 +898,16 @@ config RN5T618_POWER
 	  This driver can also be built as a module. If so, the module will be
 	  called rn5t618_power.
 
+config TPS55287_PMIC
+	tristate "TPS55287 PMIC support"
+	depends on I2C
+	depends on OF
+
+	help
+	  Say Y here to have support for TPS55287 PMIC family .
+	  This driver can also be built as a module. If so, the module will be
+	  called tps55287_pmic.
+
 config BATTERY_ACER_A500
 	tristate "Acer Iconia Tab A500 battery driver"
 	depends on MFD_ACER_A500_EC

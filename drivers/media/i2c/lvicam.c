@@ -26,7 +26,20 @@
 #include <media/v4l2-event.h>
 #include <linux/i2c.h>
 
+#include <linux/module.h>
+#include <linux/fs.h>
+#include <linux/cdev.h>
+#include <linux/uaccess.h>
+#include <linux/i2c.h>
+#include <linux/ioctl.h>
+#include <linux/types.h>
+
 #include "tc358746_regs.h"
+#include "lvicam.h"
+#include "../../../lib/lviconfig/lviconfig_parameters.h"
+
+#include <linux/signal.h>
+#include <linux/gpio/consumer.h>
 
 static int debug;
 module_param(debug, int, 0644);
@@ -38,17 +51,15 @@ MODULE_LICENSE("GPL v2");
 
 #define I2C_MAX_XFER_SIZE (512 + 2)
 
+static struct fasync_struct *lvicam_async_queue;
+
 struct lvicam_mode {
 	u32 width;
 	u32 height;
 };
 
-/* This struct is used to store all parameters related to control of the LVI camera.
-* Commands are sent via i2c to the FPGA.
-* Command documentation: "R:\Konstruktionsavdelningen\Aktuella Projekt\490 ZIP NXTG\11 Mjukvara\FPGA NXTG24\FPGA_Register_Configurations" */
-static struct lvicam_controller {
-	struct i2c_client *client;
-};
+#define DEVICE_NAME "lvicam"
+#define CLASS_NAME "lvicam"
 
 struct lvicam {
 	struct v4l2_subdev sd;
@@ -60,6 +71,8 @@ struct lvicam {
 	const struct lvicam_mode *curr_mode;
 
 	struct gpio_desc *reset_gpio;
+	struct gpio_desc *seesaw_gpio;
+	struct gpio_desc *power_enable_gpio;
 };
 
 static const struct v4l2_mbus_framefmt tc358746_def_fmt = {
@@ -136,6 +149,29 @@ static const struct tc358746_mbus_fmt tc358746_formats[] = {
 	// },
 };
 
+/* ############### LVICAM CONTROLLER STUFF ############### */
+
+/* This struct is used to store all parameters related to control of the LVI camera.
+* Commands are sent via i2c to the FPGA.
+* Command documentation: "R:\Konstruktionsavdelningen\Aktuella Projekt\490 ZIP NXTG\11 Mjukvara\FPGA NXTG24\FPGA_Register_Configurations" */
+typedef struct {
+	struct lvicam *lvicam_ptr; /* Pointer to the lvicam struct */
+
+	struct i2c_client *client;
+	struct class *class;
+	struct cdev cdev;
+	struct i2c_adapter *adapter;
+	unsigned int dev_num;
+
+	/* Initial values are imported from EEPROM via lviconfig */
+	uint16_t zoom; /* Current zoom value */
+	uint16_t zoom_min; /* Minimum zoom value */
+	uint16_t zoom_max; /* Maximum zoom value */
+	uint16_t zoom_speed; /* Zoom speed */
+} lvicam_controller;
+
+lvicam_controller lvicam_ctrl;
+
 /* Helpers */
 static const struct tc358746_mbus_fmt *tc358746_get_format(u32 code)
 {
@@ -179,8 +215,7 @@ static void i2c_rd(struct v4l2_subdev *sd, u16 reg, u8 *values, u32 n)
 
 	err = i2c_transfer(client->adapter, msgs, ARRAY_SIZE(msgs));
 	if (err != ARRAY_SIZE(msgs)) {
-		v4l2_err(sd, "%s: reading register 0x%x from 0x%x failed\n",
-			 __func__, reg, client->addr);
+		v4l2_err(sd, "%s: reading register 0x%x from 0x%x failed\n", __func__, reg, client->addr);
 	}
 
 	switch (n) {
@@ -198,9 +233,7 @@ static void i2c_rd(struct v4l2_subdev *sd, u16 reg, u8 *values, u32 n)
 		values[3] = data[2];
 		break;
 	default:
-		v4l2_info(sd,
-			  "unsupported I2C read %d bytes from address 0x%04x\n",
-			  n, reg);
+		v4l2_info(sd, "unsupported I2C read %d bytes from address 0x%04x\n", n, reg);
 	}
 
 	if (debug < 3)
@@ -211,17 +244,13 @@ static void i2c_rd(struct v4l2_subdev *sd, u16 reg, u8 *values, u32 n)
 		v4l2_info(sd, "I2C read 0x%04x = 0x%02x", reg, data[0]);
 		break;
 	case 2:
-		v4l2_info(sd, "I2C read 0x%04x = 0x%02x%02x", reg, data[0],
-			  data[1]);
+		v4l2_info(sd, "I2C read 0x%04x = 0x%02x%02x", reg, data[0], data[1]);
 		break;
 	case 4:
-		v4l2_info(sd, "I2C read 0x%04x = 0x%02x%02x%02x%02x", reg,
-			  data[2], data[3], data[0], data[1]);
+		v4l2_info(sd, "I2C read 0x%04x = 0x%02x%02x%02x%02x", reg, data[2], data[3], data[0], data[1]);
 		break;
 	default:
-		v4l2_info(sd,
-			  "I2C unsupported read %d bytes from address 0x%04x\n",
-			  n, reg);
+		v4l2_info(sd, "I2C unsupported read %d bytes from address 0x%04x\n", n, reg);
 	}
 }
 
@@ -234,8 +263,7 @@ static void i2c_wr(struct v4l2_subdev *sd, u16 reg, u8 *values, u32 n)
 
 	if ((2 + n) > I2C_MAX_XFER_SIZE) {
 		n = I2C_MAX_XFER_SIZE - 2;
-		v4l2_warn(sd, "i2c wr reg=%04x: len=%d is too big!\n", reg,
-			  2 + n);
+		v4l2_warn(sd, "i2c wr reg=%04x: len=%d is too big!\n", reg, 2 + n);
 	}
 
 	msg.addr = client->addr;
@@ -261,16 +289,12 @@ static void i2c_wr(struct v4l2_subdev *sd, u16 reg, u8 *values, u32 n)
 		data[2 + 3] = values[2];
 		break;
 	default:
-		v4l2_info(
-			sd,
-			"unsupported I2C write %d bytes from address 0x%04x\n",
-			n, reg);
+		v4l2_info(sd, "unsupported I2C write %d bytes from address 0x%04x\n", n, reg);
 	}
 
 	err = i2c_transfer(client->adapter, &msg, 1);
 	if (err != 1) {
-		v4l2_err(sd, "%s: writing register 0x%x from 0x%x failed\n",
-			 __func__, reg, client->addr);
+		pr_err("[%s] writing register 0x%x from 0x%x failed\n", __func__, reg, client->addr);
 		return;
 	}
 
@@ -279,21 +303,16 @@ static void i2c_wr(struct v4l2_subdev *sd, u16 reg, u8 *values, u32 n)
 
 	switch (n) {
 	case 1:
-		v4l2_info(sd, "I2C write 0x%04x = 0x%02x", reg, data[2 + 0]);
+		pr_info("[%s] I2C write 0x%04x = 0x%02x\n", __func__, reg, data[2 + 0]);
 		break;
 	case 2:
-		v4l2_info(sd, "I2C write 0x%04x = 0x%02x%02x", reg, data[2 + 0],
-			  data[2 + 1]);
+		pr_info("[%s] I2C write 0x%04x = 0x%02x%02x\n", __func__, reg, data[2 + 0], data[2 + 1]);
 		break;
 	case 4:
-		v4l2_info(sd, "I2C write 0x%04x = 0x%02x%02x%02x%02x", reg,
-			  data[2 + 2], data[2 + 3], data[2 + 0], data[2 + 1]);
+		pr_info("[%s] I2C write 0x%04x = 0x%02x%02x%02x%02x\n", __func__, reg, data[2 + 2], data[2 + 3], data[2 + 0], data[2 + 1]);
 		break;
 	default:
-		v4l2_info(
-			sd,
-			"I2C unsupported write %d bytes from address 0x%04x\n",
-			n, reg);
+		pr_info("[%s] I2C unsupported write %d bytes from address 0x%04x\n", __func__, n, reg);
 	}
 }
 
@@ -352,7 +371,7 @@ static void i2c_wr32(struct v4l2_subdev *sd, u16 reg, u32 val)
 
 static void lvicam_setup(struct v4l2_subdev *sd)
 {
-	printk("[%s] call", __func__);
+	pr_info("[%s] call\n", __func__);
 
 	//*********************************************
 	//Start up sequence
@@ -432,14 +451,11 @@ static void lvicam_setup(struct v4l2_subdev *sd)
 }
 
 /* Ops */
-
-static int lvicam_enum_mbus_code(struct v4l2_subdev *sd,
-				 struct v4l2_subdev_pad_config *cfg,
-				 struct v4l2_subdev_mbus_code_enum *code)
+static int lvicam_enum_mbus_code(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config *cfg, struct v4l2_subdev_mbus_code_enum *code)
 {
 	struct lvicam *lvicam = to_lvicam(sd);
 
-	printk("[%s] call", __func__);
+	pr_info("[%s] call\n", __func__);
 
 	if (code->index >= ARRAY_SIZE(tc358746_formats))
 		return -EINVAL;
@@ -451,14 +467,11 @@ static int lvicam_enum_mbus_code(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int lvicam_get_fmt(struct v4l2_subdev *sd,
-			  struct v4l2_subdev_pad_config *cfg,
-			  struct v4l2_subdev_format *fmt)
+static int lvicam_get_fmt(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config *cfg, struct v4l2_subdev_format *fmt)
 {
-	// struct v4l2_mbus_framefmt *framefmt;
 	struct lvicam *lvicam = to_lvicam(sd);
 
-	printk("[%s] call", __func__);
+	pr_info("[%s] call\n", __func__);
 
 	if (fmt->pad)
 		return -EINVAL;
@@ -473,22 +486,18 @@ static int lvicam_get_fmt(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int lvicam_set_fmt(struct v4l2_subdev *sd,
-			  struct v4l2_subdev_pad_config *cfg,
-			  struct v4l2_subdev_format *fmt)
+static int lvicam_set_fmt(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config *cfg, struct v4l2_subdev_format *fmt)
 {
 	struct lvicam *lvicam = to_lvicam(sd);
 	struct v4l2_mbus_framefmt *framefmt;
 	const struct lvicam_mode *mode;
 
-	printk("[%s] call", __func__);
+	pr_info("[%s] call\n", __func__);
 
 	//TODO: Where is format actually set?
 	mutex_lock(&lvicam->mutex);
 
-	mode = v4l2_find_nearest_size(lvicam_modes, ARRAY_SIZE(lvicam_modes),
-				      width, height, fmt->format.width,
-				      fmt->format.height);
+	mode = v4l2_find_nearest_size(lvicam_modes, ARRAY_SIZE(lvicam_modes), width, height, fmt->format.width, fmt->format.height);
 
 	fmt->format.code = lvicam->fmt.code;
 	fmt->format.colorspace = lvicam->fmt.colorspace;
@@ -512,32 +521,29 @@ static int lvicam_set_fmt(struct v4l2_subdev *sd,
 static int lvicam_set_stream(struct v4l2_subdev *sd, int enable)
 {
 	if (enable) {
-		printk("[%s] enable:%d", __func__, enable);
+		pr_info("[%s] enable:%d\n", __func__, enable);
 		lvicam_setup(sd);
 	} else {
-		printk("[%s] disable:%d", __func__, enable);
+		pr_info("[%s] disable:%d\n", __func__, enable);
 	}
 
 	return 0;
 }
 
-static int lvicam_enum_frame_size(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_frame_size_enum *fse)
+static int lvicam_enum_frame_size(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config *cfg, struct v4l2_subdev_frame_size_enum *fse)
 {
-	printk("[%s] call", __func__);
+	pr_info("[%s] call\n", __func__);
 
 	struct lvicam *lvicam = to_lvicam(sd);
 
 	if (fse->index >= ARRAY_SIZE(lvicam_modes)) {
-		printk("[%s] FAIL : fse-index = %d", __func__, fse->index);
-
+		pr_info("[%s] FAIL : fse-index = %d\n", __func__, fse->index);
 		return -EINVAL;
 	}
 
 	// mutex_lock(&lvicam->mutex);
 	// if (fse->code != lvicam->fmt.code) {
-	// 	printk("[%s] FAIL : fse->code = %d, lvicam->fmt.code = %d, they should be the same", __func__, fse->code, lvicam->fmt.code);
+	// 	pr_info("[%s] FAIL : fse->code = %d, lvicam->fmt.code = %d, they should be the same", __func__, fse->code, lvicam->fmt.code);
 
 	// 	mutex_unlock(&lvicam->mutex);
 	// 	return -EINVAL;
@@ -550,18 +556,14 @@ static int lvicam_enum_frame_size(struct v4l2_subdev *sd,
 	fse->max_height = lvicam_modes[fse->index].height;
 	fse->min_height = fse->max_height;
 
-	printk("[%s] SUCCESS : width = %d, height = %d", __func__,
-	       fse->min_width, fse->min_height);
+	pr_info("[%s] SUCCESS : width = %d, height = %d\n", __func__, fse->min_width, fse->min_height);
 
 	return 0;
 }
 
-static int
-lvicam_enum_frame_interval(struct v4l2_subdev *sd,
-			   struct v4l2_subdev_pad_config *cfg,
-			   struct v4l2_subdev_frame_interval_enum *fie)
+static int lvicam_enum_frame_interval(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config *cfg, struct v4l2_subdev_frame_interval_enum *fie)
 {
-	printk("[%s] call", __func__);
+	pr_info("[%s] call\n", __func__);
 
 	struct lvicam *lvicam = to_lvicam(sd);
 
@@ -593,17 +595,17 @@ static const struct v4l2_subdev_video_ops tc358746_video_ops = {
 
 static void lvicam_gpio_reset(struct lvicam *lvicam)
 {
-	printk("%s", __func__);
+	pr_info("[%s] call\n", __func__);
 	usleep_range(5000, 10000);
-	gpiod_set_value(lvicam->reset_gpio, 1);
+	gpiod_set_value_cansleep(lvicam->reset_gpio, 1);
 	usleep_range(1000, 2000);
-	gpiod_set_value(lvicam->reset_gpio, 0);
+	gpiod_set_value_cansleep(lvicam->reset_gpio, 0);
 	msleep(20);
 }
 
 static int lvicam_s_power(struct v4l2_subdev *sd, int on)
 {
-	printk("lvicam s_power %d", on);
+	pr_info("[%s] %d\n", __func__, on);
 
 	struct lvicam *lvicam = to_lvicam(sd);
 
@@ -633,8 +635,7 @@ static int tc358746_get_reg_size(u16 address)
 		return 1;
 }
 
-static int tc358746_g_register(struct v4l2_subdev *sd,
-			       struct v4l2_dbg_register *reg)
+static int tc358746_g_register(struct v4l2_subdev *sd, struct v4l2_dbg_register *reg)
 {
 	if (reg->reg > 0xffff) {
 		tc358746_print_register_map(sd);
@@ -645,13 +646,12 @@ static int tc358746_g_register(struct v4l2_subdev *sd,
 
 	reg->val = i2c_rdreg(sd, reg->reg, reg->size);
 
-	printk("lvicam: 0x%X=0x%X, %d", reg->reg, reg->val, reg->size);
+	pr_info("[%s] 0x%X=0x%X, %d\n", __func__, reg->reg, reg->val, reg->size);
 
 	return 0;
 }
 
-static int tc358746_s_register(struct v4l2_subdev *sd,
-			       const struct v4l2_dbg_register *reg)
+static int tc358746_s_register(struct v4l2_subdev *sd, const struct v4l2_dbg_register *reg)
 {
 	if (reg->reg > 0xffff) {
 		tc358746_print_register_map(sd);
@@ -671,27 +671,15 @@ static int tc358746_log_status(struct v4l2_subdev *sd)
 	uint16_t sysctl = i2c_rd16(sd, SYSCTL);
 
 	v4l2_info(sd, "-----Chip status-----\n");
-	v4l2_info(sd, "Chip ID: 0x%02lx\n",
-		  (i2c_rd16(sd, CHIPID) & CHIPID_CHIPID_MASK) >> 8);
-	v4l2_info(sd, "Chip revision: 0x%02lx\n",
-		  i2c_rd16(sd, CHIPID) & CHIPID_REVID_MASK);
-	v4l2_info(sd, "Sleep mode: %s\n",
-		  sysctl & SYSCTL_SLEEP_MASK ? "on" : "off");
+	v4l2_info(sd, "Chip ID: 0x%02lx\n", (i2c_rd16(sd, CHIPID) & CHIPID_CHIPID_MASK) >> 8);
+	v4l2_info(sd, "Chip revision: 0x%02lx\n", i2c_rd16(sd, CHIPID) & CHIPID_REVID_MASK);
+	v4l2_info(sd, "Sleep mode: %s\n", sysctl & SYSCTL_SLEEP_MASK ? "on" : "off");
 
 	v4l2_info(sd, "-----CSI-TX status-----\n");
-	v4l2_info(sd, "Waiting for particular sync signal: %s\n",
-		  (i2c_rd16(sd, CSI_STATUS) & CSI_STATUS_S_WSYNC_MASK) ? "yes" :
-									 "no");
-	v4l2_info(sd, "Transmit mode: %s\n",
-		  (i2c_rd16(sd, CSI_STATUS) & CSI_STATUS_S_TXACT_MASK) ? "yes" :
-									 "no");
-	v4l2_info(sd, "Stopped: %s\n",
-		  (i2c_rd16(sd, CSI_STATUS) & CSI_STATUS_S_HLT_MASK) ? "yes" :
-								       "no");
-	v4l2_info(sd, "Color space: %s\n",
-		  lvicam->fmt.code == MEDIA_BUS_FMT_UYVY8_2X8 ?
-			  "YCbCr 422 8-bit" :
-			  "Unsupported");
+	v4l2_info(sd, "Waiting for particular sync signal: %s\n", (i2c_rd16(sd, CSI_STATUS) & CSI_STATUS_S_WSYNC_MASK) ? "yes" : "no");
+	v4l2_info(sd, "Transmit mode: %s\n", (i2c_rd16(sd, CSI_STATUS) & CSI_STATUS_S_TXACT_MASK) ? "yes" : "no");
+	v4l2_info(sd, "Stopped: %s\n", (i2c_rd16(sd, CSI_STATUS) & CSI_STATUS_S_HLT_MASK) ? "yes" : "no");
+	v4l2_info(sd, "Color space: %s\n", lvicam->fmt.code == MEDIA_BUS_FMT_UYVY8_2X8 ? "YCbCr 422 8-bit" : "Unsupported");
 
 	return 0;
 }
@@ -713,9 +701,7 @@ static const struct v4l2_subdev_ops lvicam_subdev_ops = {
 	.pad = &lvicam_pad_ops,
 };
 
-static int lvicam_link_setup(struct media_entity *entity,
-			     const struct media_pad *local,
-			     const struct media_pad *remote, u32 flags)
+static int lvicam_link_setup(struct media_entity *entity, const struct media_pad *local, const struct media_pad *remote, u32 flags)
 {
 	return 0;
 }
@@ -728,57 +714,270 @@ static const struct media_entity_operations lvicam_entity_ops = {
 	.link_validate = v4l2_subdev_link_validate,
 };
 
+/* seesaw gpio interrupt stuff */
+static int lvicam_fasync(int fd, struct file *file, int on)
+{
+	return fasync_helper(fd, file, on, &lvicam_async_queue);
+}
+
+static long lvicam_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct lvicam_i2c_cmd i2c_cmd;
+	if (copy_from_user(&i2c_cmd, (void __user *)arg, sizeof(i2c_cmd)))
+		return -EFAULT;
+
+	int ret;
+
+	switch (cmd) {
+	case LVICAM_CTRL_IOCTL_WRITE_DATA: {
+		if (i2c_cmd.size != 1 && i2c_cmd.size != 2)
+			return -EINVAL;
+
+		uint8_t buf[3] = { 0 };
+		int buf_len = 1 + i2c_cmd.size;
+		buf[0] = i2c_cmd.subreg;
+
+		if (i2c_cmd.size == 1) {
+			buf[1] = (uint8_t)(i2c_cmd.data);
+		} else if (i2c_cmd.size == 2) {
+			buf[1] = (uint8_t)(i2c_cmd.data >> 8); // MSB
+			buf[2] = (uint8_t)(i2c_cmd.data & 0xFF); // LSB
+		}
+
+		struct i2c_msg msg = {
+			.addr = lvicam_ctrl.client->addr,
+			.flags = 0,
+			.len = buf_len,
+			.buf = buf,
+		};
+
+		ret = i2c_transfer(lvicam_ctrl.adapter, &msg, 1);
+
+		pr_info("[%s] WRITE: subreg=0x%02X, size=%zu -> buf[1]=0x%02X buf[2]=0x%02X\n", __func__, i2c_cmd.subreg, i2c_cmd.size, buf[1], buf[2]);
+
+		return (ret == 1) ? 0 : -EIO;
+	}
+
+	case LVICAM_CTRL_IOCTL_READ_DATA: {
+		if (i2c_cmd.size != 1 && i2c_cmd.size != 2)
+			return -EINVAL;
+
+		uint8_t subreg = i2c_cmd.subreg;
+		uint8_t read_buf[2] = { 0 };
+
+		struct i2c_msg msgs[2] = {
+			{
+				.addr = lvicam_ctrl.client->addr,
+				.flags = 0,
+				.len = 1,
+				.buf = &subreg,
+			},
+			{
+				.addr = lvicam_ctrl.client->addr,
+				.flags = I2C_M_RD,
+				.len = i2c_cmd.size,
+				.buf = read_buf,
+			},
+		};
+
+		ret = i2c_transfer(lvicam_ctrl.adapter, msgs, 2);
+		if (ret != 2)
+			return -EIO;
+
+		// Combine bytes read from single subreg read
+		if (i2c_cmd.size == 1) {
+			i2c_cmd.data = read_buf[0];
+		} else if (i2c_cmd.size == 2) {
+			i2c_cmd.data = (read_buf[0] << 8) | read_buf[1]; // MSB first
+		}
+
+		pr_info("[%s] READ: subreg=0x%02X, size=%zu -> data=0x%02X%02X\n", __func__, subreg, i2c_cmd.size, read_buf[0], read_buf[1]);
+
+		if (copy_to_user((void __user *)arg, &i2c_cmd, sizeof(i2c_cmd)))
+			return -EFAULT;
+
+		return 0;
+	}
+
+	case LVICAM_CTRL_IOCTL_READ_SEESAW: {
+		struct lvicam_seesaw_status status;
+		status.value = gpiod_get_value(lvicam_ctrl.lvicam_ptr->seesaw_gpio);
+		if (copy_to_user((void __user *)arg, &status, sizeof(status)))
+			return -EFAULT;
+		return 0;
+	}
+
+	default:
+		return -ENOTTY;
+	}
+}
+
+static struct file_operations fops = {
+	.owner = THIS_MODULE,
+	.unlocked_ioctl = lvicam_ioctl,
+	.fasync = lvicam_fasync,
+};
+
+#define I2C_BUS_NUM 2 // /dev/i2c-2
+#define I2C_DEV_ADDR 0x10
+
+static int lvicam_ctrl_device_init(void)
+{
+	int ret;
+
+	// Allocate character device region
+	ret = alloc_chrdev_region(&lvicam_ctrl.dev_num, 0, 1, DEVICE_NAME);
+	if (ret)
+		return ret;
+
+	cdev_init(&lvicam_ctrl.cdev, &fops);
+	ret = cdev_add(&lvicam_ctrl.cdev, lvicam_ctrl.dev_num, 1);
+	if (ret)
+		goto unregister;
+
+	lvicam_ctrl.class = class_create(THIS_MODULE, CLASS_NAME);
+	if (IS_ERR(lvicam_ctrl.class)) {
+		ret = PTR_ERR(lvicam_ctrl.class);
+		goto del_cdev;
+	}
+
+	device_create(lvicam_ctrl.class, NULL, lvicam_ctrl.dev_num, NULL, DEVICE_NAME);
+
+	lvicam_ctrl.adapter = i2c_get_adapter(I2C_BUS_NUM);
+	if (!lvicam_ctrl.adapter) {
+		ret = -ENODEV;
+		goto destroy_device;
+	}
+
+	lvicam_ctrl.client = i2c_new_dummy_device(lvicam_ctrl.adapter, I2C_DEV_ADDR);
+	if (IS_ERR(lvicam_ctrl.client)) {
+		ret = PTR_ERR(lvicam_ctrl.client);
+		goto put_adapter;
+	}
+
+	pr_info("[%s] Device initialized with I2C address 0x%02x\n", __func__, lvicam_ctrl.client->addr << 1);
+	return 0;
+
+put_adapter:
+	i2c_put_adapter(lvicam_ctrl.adapter);
+destroy_device:
+	device_destroy(lvicam_ctrl.class, lvicam_ctrl.dev_num);
+	class_destroy(lvicam_ctrl.class);
+del_cdev:
+	cdev_del(&lvicam_ctrl.cdev);
+unregister:
+	unregister_chrdev_region(lvicam_ctrl.dev_num, 1);
+	return ret;
+}
+
+/** @brief IRQ handler for seesaw input GPIO
+ *	@param 
+ */
+static irqreturn_t lvicam_seesaw_irq_handler(int irq, void *dev_id)
+{
+	pr_info("[%s] seesaw GPIO interrupt triggered\n", __func__);
+	kill_fasync(&lvicam_async_queue, SIGIO, POLL_IN);
+	return IRQ_HANDLED;
+}
 /* Probe & Remove */
 
 static int lvicam_probe(struct i2c_client *client)
 {
 	int err = 0;
+	int seesaw_irq;
 
-	printk("[%s] call", __func__);
+	pr_info("[%s] call\n", __func__);
 
 	struct lvicam *lvicam;
 	lvicam = devm_kzalloc(&client->dev, sizeof(*lvicam), GFP_KERNEL);
 
 	if (!lvicam) {
-		printk("[%s] : ERROR 1", __func__);
+		pr_err("[%s] : ERROR 1\n", __func__);
 		return -ENOMEM;
 	}
+
+	lvicam_ctrl.lvicam_ptr = lvicam;
 
 	mutex_init(&lvicam->mutex);
 
 	v4l2_i2c_subdev_init(&lvicam->sd, client, &lvicam_subdev_ops);
 
 	v4l2_err(&lvicam->sd, "Fetching reset gpio\n");
-	lvicam->reset_gpio = devm_gpiod_get(&client->dev, "reset", GPIOD_ASIS);
-	if (IS_ERR(lvicam->reset_gpio)) {
-		printk("[%s] : ERROR 2", __func__);
+	lvicam->reset_gpio = devm_gpiod_get(&client->dev, "reset", GPIOD_OUT_LOW);
 
+	if (IS_ERR(lvicam->reset_gpio)) {
+		pr_err("[%s] : ERROR 2\n", __func__);
 		v4l2_err(&lvicam->sd, "Failed to get reset gpio\n");
 		err = PTR_ERR(lvicam->reset_gpio);
 		goto error_media_entity;
+	} else if (lvicam->reset_gpio) {
+		pr_info("[%s] reset GPIO found\n", __func__);
+		gpiod_set_value_cansleep(lvicam->reset_gpio, 1); // Set reset GPIO high
+	} else {
+		pr_info("[%s] reset GPIO not found, assuming always enabled\n", __func__);
 	}
+
+	if (lvicam->reset_gpio) {
+		pr_info("[%s] resetting TC358746.\n", __func__);
+
+		lvicam_gpio_reset(lvicam);
+	}
+
+	lvicam->seesaw_gpio = devm_gpiod_get(&client->dev, "seesaw", GPIOD_IN);
+
+	if (IS_ERR(lvicam->seesaw_gpio)) {
+		pr_err("[%s] : ERROR 2B\n", __func__);
+		pr_info("[%s] Failed to get seesaw gpio\n", __func__);
+		err = PTR_ERR(lvicam->seesaw_gpio);
+	} else if (lvicam->seesaw_gpio) {
+		// Request IRQ for seesaw GPIO
+		seesaw_irq = gpiod_to_irq(lvicam->seesaw_gpio);
+		if (seesaw_irq < 0) {
+			pr_err("[%s] Failed to get IRQ for seesaw gpio\n", __func__);
+			err = seesaw_irq;
+			goto error_media_entity;
+		}
+		err = devm_request_threaded_irq(&client->dev, seesaw_irq, NULL, lvicam_seesaw_irq_handler, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT, "lvicam_seesaw", lvicam);
+		if (err) {
+			pr_err("[%s] Failed to request IRQ for seesaw gpio: %d\n", __func__, err);
+			goto error_media_entity;
+		}
+		pr_info("[%s] seesaw GPIO interrupt registered on IRQ %d\n", __func__, seesaw_irq);
+	}
+
+	// Get power enable GPIO
+	// This is the key part to fix the issue.
+	// Use `GPIOD_OUT_HIGH` to match `GPIO_ACTIVE_HIGH` in DTS.
+	lvicam->power_enable_gpio = devm_gpiod_get(&client->dev, "power-enable", GPIOD_OUT_HIGH);
+	if (IS_ERR(lvicam->power_enable_gpio)) {
+		err = PTR_ERR(lvicam->power_enable_gpio);
+		if (err == -EPROBE_DEFER) {
+			pr_info("[%s] Power-enable GPIO dependency not ready, deferring probe.\n", __func__);
+		} else {
+			pr_err("[%s] Failed to get power-enable gpio: %d\n", __func__, err);
+		}
+		return err; // Return the error so the kernel can handle it
+	}
+	pr_info("[%s] power-enable GPIO found. Initialized HIGH.\n", __func__);
+
 	// gpiod_direction_output(lvicam->reset_gpio, 0);
 	msleep(10);
 
 	/* Check ID of the connected TC358746 -> this is where the i2c address 0x0e is fetched and claimed (if present) */
 	v4l2_err(&lvicam->sd, "Fetching device\n");
-	if (((i2c_rd16(&lvicam->sd, CHIPID) & CHIPID_CHIPID_MASK) >> 8) !=
-	    0x44) {
-		printk("[%s] : ERROR 3", __func__);
-
-		v4l2_info(&lvicam->sd, "not a TC358746 on address 0x%x\n",
-			  client->addr << 1);
-		err = -ENODEV;
-		goto on_error;
-	}
+	// if (((i2c_rd16(&lvicam->sd, CHIPID) & CHIPID_CHIPID_MASK) >> 8) != 0x44) {
+	// 	pr_err("[%s] : ERROR 3\n", __func__);
+	// 	v4l2_info(&lvicam->sd, "not a TC358746 on address 0x%x\n", client->addr << 1);
+	// 	err = -ENODEV;
+	// 	goto on_error;
+	// }
 
 	/* Todo controls, do we need them ?*/
 
 	lvicam->curr_mode = &lvicam_modes[0];
 
 	/* Initialize subdev */
-	lvicam->sd.flags |=
-		V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_HAS_EVENTS;
+	lvicam->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_HAS_EVENTS;
 	//todo V4L2_SUBDEV_FL_HAS_EVENTS?
 	lvicam->sd.entity.ops = &lvicam_entity_ops;
 	lvicam->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
@@ -787,33 +986,31 @@ static int lvicam_probe(struct i2c_client *client)
 	lvicam->pad.flags = MEDIA_PAD_FL_SOURCE;
 	err = media_entity_pads_init(&lvicam->sd.entity, 1, &lvicam->pad);
 	if (err) {
-		printk("[%s] : ERROR 4", __func__);
-
+		pr_err("[%s] : ERROR 4\n", __func__);
 		v4l2_err(&lvicam->sd, "failed to init entity pads: %d", err);
 		goto on_error;
 	}
 
 	err = v4l2_async_register_subdev_sensor_common(&lvicam->sd);
 	if (err < 0) {
-		printk("[%s] : ERROR 5", __func__);
-
+		pr_err("[%s] : ERROR 5\n", __func__);
 		v4l2_err(&lvicam->sd, "failed to register subdev: %d", err);
 		goto error_media_entity;
 	}
 
-	if (lvicam->reset_gpio)
-		lvicam_gpio_reset(lvicam);
-
 	lvicam->fmt = tc358746_def_fmt;
+
+	//initialize lvicam_ctrl
+	lvicam_ctrl_device_init();
 
 	return 0;
 
 error_media_entity:
-	printk("[%s] : ERROR : error_media_entity", __func__);
+	pr_err("[%s] : ERROR : error_media_entity\n", __func__);
 	media_entity_cleanup(&lvicam->sd.entity);
 
 on_error:
-	printk("[%s] : ERROR : on_error", __func__);
+	pr_err("[%s] : ERROR : on_error\n", __func__);
 	mutex_destroy(&lvicam->mutex);
 	return err;
 }
@@ -823,7 +1020,9 @@ static int lvicam_remove(struct i2c_client *client)
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct lvicam *lvicam = to_lvicam(sd);
 
-	printk("[%s] call", __func__);
+	gpiod_set_value(lvicam->reset_gpio, 0); // Disable the power supply
+
+	pr_info("[%s] call\n", __func__);
 
 	v4l2_async_unregister_subdev(sd);
 	media_entity_cleanup(&sd->entity);

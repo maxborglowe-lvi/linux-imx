@@ -15,21 +15,25 @@
 // IOCTL Commands
 #define LVICAM_CTRL_IOCTL_READ_DATA _IOR(LVICAM_IOC_MAGIC, 1, struct lvicam_i2c_cmd)
 #define LVICAM_CTRL_IOCTL_WRITE_DATA _IOW(LVICAM_IOC_MAGIC, 2, struct lvicam_i2c_cmd)
+#define LVICAM_CTRL_IOCTL_READ_SEESAW _IOR(LVICAM_IOC_MAGIC, 3, struct lvicam_seesaw_status)
 
-struct lvicam_i2c_cmd
-{
-    uint8_t subreg;
-    uint16_t data;
-    size_t size;
+struct lvicam_i2c_cmd {
+	uint8_t subreg;
+	uint16_t data;
+	size_t size;
+};
+
+struct lvicam_seesaw_status {
+	int value; // Current value of the seesaw
 };
 
 // ******* FPGA STATUS REGISTERS ********
 
 // FPGA Status Register: 0x80
 #define FPGA_FLAGS_INIT_STATUS_REG 0x80
-#define FPGA_FLAG_PLL_SYS_LOCKED (1 << 3)     // Bit 3: System PLL locked
-#define FPGA_FLAG_PLL_CAM_LOCKED (1 << 2)     // Bit 2: Camera PLL locked
-#define FPGA_FLAG_CAMERA_ID_OK (1 << 1)       // Bit 1: Camera ID matched config
+#define FPGA_FLAG_PLL_SYS_LOCKED (1 << 3) // Bit 3: System PLL locked
+#define FPGA_FLAG_PLL_CAM_LOCKED (1 << 2) // Bit 2: Camera PLL locked
+#define FPGA_FLAG_CAMERA_ID_OK (1 << 1) // Bit 1: Camera ID matched config
 #define FPGA_FLAG_CAMERA_INITIALIZED (1 << 0) // Bit 0: Camera initialized
 
 // Camera ID Register: 0x81
@@ -62,9 +66,9 @@ struct lvicam_i2c_cmd
 
 // Picture Mode Register: 0xCC
 #define PICTURE_MODE_STATUS_REG 0xCC
-#define PICTURE_MODE_ART_MASK 0xF0     // Bits 7:4 - Artifical color palette index (0-15)
-#define PICTURE_MODE_NAT_MASK 0x0C     // Bits 3:2 - Natural color palette index (0-3)
-#define PICTURE_MODE_NAT_ON 0x02       // Bit 1: 1 = Natural mode, 0 = Artificial mode
+#define PICTURE_MODE_ART_MASK 0xF0 // Bits 7:4 - Artifical color palette index (0-15)
+#define PICTURE_MODE_NAT_MASK 0x0C // Bits 3:2 - Natural color palette index (0-3)
+#define PICTURE_MODE_NAT_ON 0x02 // Bit 1: 1 = Natural mode, 0 = Artificial mode
 #define PICTURE_MODE_CAMERA_FLIRP 0x01 // Bit 0: 1 = Distance camera, 0 = Readout camera
 
 // PN Level Register: 0xCD
@@ -80,7 +84,7 @@ struct lvicam_i2c_cmd
 // Reserved: 0x02 - 0x04
 
 // ********* ID Control Registers *********
-#define PRODUCT_ID_CONTROL_REG 0x05        // [7:0] Write
+#define PRODUCT_ID_CONTROL_REG 0x05 // [7:0] Write
 #define PRODUCT_ID_MLZIP_FHD_17_TOUCH 0x1A // Example product ID for MLZIP FHD 17" Touch
 
 // #define PANEL_ID_CONTROL_REG 0x06  // [7:0] Write
@@ -111,16 +115,16 @@ struct lvicam_i2c_cmd
 
 // ********* Camera Control Registers *********
 // Camera 1 (Readout)
-#define CAM1_ZOOM_SPEED_CONTROL_REG 0x10    // [15:0] Write
-#define CAM1_ZOOM_POS_MIN_CONTROL_REG 0x11  // [15:0] Write
-#define CAM1_ZOOM_POS_MAX_CONTROL_REG 0x12  // [15:0] Write
+#define CAM1_ZOOM_SPEED_CONTROL_REG 0x10 // [15:0] Write
+#define CAM1_ZOOM_POS_MIN_CONTROL_REG 0x11 // [15:0] Write
+#define CAM1_ZOOM_POS_MAX_CONTROL_REG 0x12 // [15:0] Write
 #define CAM1_ZOOM_POS_INIT_CONTROL_REG 0x13 // [15:0] Write
 
 // Camera 2 (Distance)
-#define CAM2_ZOOM_POS_MIN_CONTROL_REG 0x14  // [15:0] Write
-#define CAM2_ZOOM_POS_MAX_CONTROL_REG 0x15  // [15:0] Write
+#define CAM2_ZOOM_POS_MIN_CONTROL_REG 0x14 // [15:0] Write
+#define CAM2_ZOOM_POS_MAX_CONTROL_REG 0x15 // [15:0] Write
 #define CAM2_ZOOM_POS_INIT_CONTROL_REG 0x16 // [15:0] Write
-#define CAM2_ZOOM_SPEED_CONTROL_REG 0x17    // [15:0] Write
+#define CAM2_ZOOM_SPEED_CONTROL_REG 0x17 // [15:0] Write
 
 // Reserved: 0x18, 0x19
 
@@ -135,7 +139,7 @@ struct lvicam_i2c_cmd
 
 // ********* Activated Functions Control Register *********
 // NOTE: Sub Address not clearly defined in doc (marked as 0x??), define as placeholder
-#define ACTIVATED_FUNCTIONS_CONTROL_REG 0x20       // [7:0] Write (bitmask)
+#define ACTIVATED_FUNCTIONS_CONTROL_REG 0x20 // [7:0] Write (bitmask)
 #define ACT_FUNC_BITMASK_OBJECT_SHOW_VIEW (1 << 0) // Example use: Bit 0 toggles ObjectShowView
 
 #endif // LVICAM_CTRL_H

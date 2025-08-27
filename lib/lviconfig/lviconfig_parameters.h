@@ -1,22 +1,11 @@
 #ifndef LVICONFIG_PARAMETERS_H
 #define LVICONFIG_PARAMETERS_H
 
-#ifdef __KERNEL__
 // Kernel space definitions
 #include <linux/types.h>
 #include <linux/string.h> // For strcmp, strlen, etc. in kernel
 #include <linux/slab.h> // For kmalloc/kfree
 #include <linux/kernel.h> // For printk, KERN_ERR, etc.
-// Forward declare i2c_client if needed for platform functions, though not directly used in this header
-// struct i2c_client;
-#else
-// User space definitions
-#include <stdint.h>
-#include <stddef.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-#endif
 
 // The amount of configuration structs for each type
 #define CONFIG_COLOR_AMT 16
@@ -81,12 +70,13 @@ typedef struct {
 
 typedef struct {
 	const char *name;
+	ConfigParam Zoom;
 	ConfigParam ZoomMin;
 	ConfigParam ZoomMax;
 	ConfigParam ZoomSpeed;
 	ConfigParam Focus;
-	ConfigParam FocusRangeMin;
-	ConfigParam FocusRangeMax;
+	ConfigParam FocusMin;
+	ConfigParam FocusMax;
 	ConfigParam FocusSpeed;
 	ConfigParam NaturalColorExposure;
 	ConfigParam ArtificialColorExposure;
@@ -147,9 +137,15 @@ typedef struct {
 	ConfigParam LowCapacityLimit;
 } ConfigBattery;
 
+typedef struct {
+	const char *name;
+	ConfigParam Intensity; /* Only this parameter is actually useful for regular unicolor LED-strips*/
+	// ConfigParam ColorTemperature; /* Additional example parameters for e.g neopixels */
+} ConfigLighting;
+
 // Shared externs
 // This is where all configuration parameters are stored.
-// After parsing the lviconfig.conf file, these will be initialized with the values from the file.
+// After initializing these variables and parsing the EEPROM, these structs will contain all of the current configuration values.
 extern ConfigParam confLicenseKey[CONFIG_LICENSE_KEY_AMT];
 extern ConfigParam confFactoryDefaultVersion;
 extern ConfigParam confProductId;
@@ -162,35 +158,20 @@ extern ConfigVideo confVideo[CONFIG_VIDEO_AMT];
 extern ConfigGraphics confGraphics;
 extern ConfigPTZ confPTZ;
 extern ConfigBattery confBattery;
+extern ConfigLighting confLighting;
 
 // Platform-specific EEPROM access functions
-// These must be implemented by the target environment (kernel or user-space)
-int platform_eeprom_write(uint32_t reg, uint8_t data);
-int platform_eeprom_read(uint32_t reg, uint8_t *data);
+// probably only kernel use is required
+int lviconfig_platform_eeprom_write(uint32_t reg, uint8_t data);
+int lviconfig_platform_eeprom_read(uint32_t reg, uint8_t *data);
 
-// Core functions (shared)
-ConfigParam ConfigParam_Init(const char *name, const void *data,
-			     DataType type); // name should be const
-void ConfigParam_InitAll(void);
+ConfigParam ConfigParam_Init(const char *name, const void *data, DataType type); // name should be const
 ConfigParam *ConfigParam_FindByName(const char *path);
-void ConfigParam_PrintParam(
-	ConfigParam *param); // Primarily for user-space debugging
+void ConfigParam_InitAll(void);
+void ConfigParam_ParseEEPROM(void);
+void ConfigParam_PrintParam(ConfigParam *param); // Primarily for user-space debugging
 void ConfigParam_PrintAll(void); // Primarily for user-space debugging
 void ConfigParam_SetData(ConfigParam *param, const void *data);
 const void *ConfigParam_GetData(ConfigParam *param);
-
-// Configuration parsing functions
-// Kernel and user-space can use ParseBuffer if buffer is pre-loaded
-void ConfigParam_ParseBuffer(const char *buffer, size_t buffer_len);
-uint8_t ConfigParam_ParseSingleBuffer(const char *buffer, size_t buffer_len,
-				      const char *target_key);
-void ConfigParam_ParseEEPROM(void);
-
-#ifndef __KERNEL__
-// User-space only functions that handle file I/O
-void ConfigParam_ParseFile(const char *filename);
-uint8_t ConfigParam_ParseFileSingle(const char *filename,
-				    const char *target_key);
-#endif // !__KERNEL__
 
 #endif // LVICONFIG_PARAMETERS_H

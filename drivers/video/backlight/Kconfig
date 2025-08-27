@@ -485,6 +485,7 @@ config BACKLIGHT_DS1050Z
 config BACKLIGHT_NCS8801S
 	tristate "NewCoSemi LVDS to eDP converter"
 	depends on GPIO_LVIGPIO
+	depends on I2C
 	help
 	  Used for converting LVDS to eDP.
 
