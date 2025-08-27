@@ -1,67 +1,30 @@
 #include "lviconfig_parameters.h"
-#include "lviconfig_ctrl.h"
-#ifdef __KERNEL__
-#define LVI_PRINT(fmt, ...)                                                    \
-	printk(KERN_INFO "lviconfig_parameters: " fmt, ##__VA_ARGS__)
-#define LVI_ERR_PRINT(fmt, ...)                                                \
-	printk(KERN_ERR "lviconfig_parameters: " fmt, ##__VA_ARGS__)
-#define LVI_MALLOC(size) kmalloc(size, GFP_KERNEL)
-#define LVI_FREE(ptr) kfree(ptr)
-#define LVI_STRDUP(s) kstrdup(s, GFP_KERNEL)
+// #include "lviconfig_ctrl.h"
 
-#define LVI_STRTOKEN(kernel_stringp_ref, user_string_val_ignored, delim)       \
-	strsep(kernel_stringp_ref, delim)
+//copy string to variable
+#define STRDUP(s) kstrdup(s, GFP_KERNEL)
 
-static inline int lvi_atoi(const char *s)
+//kernel version of atoi
+static inline int katoi(const char *s)
 {
 	long res;
 	if (kstrtol(s, 10, &res) == 0)
 		return (int)res;
 	return 0;
 }
-#define LVI_ATOI(s) lvi_atoi(s)
 
-#else
-// User-space specific utilities
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-// User-space strnchr fallback
-static inline char *lvi_user_strnchr(const char *s, size_t count, int c)
-{
-	if (s == NULL)
-		return NULL;
-	for (size_t i = 0; i < count && s[i] != '\0'; ++i) // Corrected to '\0'
-	{
-		if (s[i] == (char)c) {
-			return (char *)(s + i);
-		}
-	}
-	return NULL;
-}
-#define LVI_STRNCHR(s, count, c) lvi_user_strnchr(s, count, c)
-
-#define LVI_PRINT(fmt, ...) printf(fmt, ##__VA_ARGS__)
-#define LVI_ERR_PRINT(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
-#define LVI_MALLOC(size) malloc(size)
-#define LVI_FREE(ptr) free(ptr)
-#define LVI_STRDUP(s) strdup(s)
-#define LVI_ATOI(s) atoi(s)
-
-#define LVI_STRTOKEN(kernel_stringp_ref_ignored, user_string_val, delim)       \
-	strtok(user_string_val, delim)
-
-#endif
-
-#ifdef __KERNEL__
-// Ifdef for LVI_STRNCHR in kernel mode
-#define LVI_STRNCHR(s, count, c) strnchr(s, count, c)
-#endif
-
-// Global variables
+// Global address variable to keep track of the next available address
 static uint32_t addr = 0;
 
+/**
+ * @brief Global configuration parameters.
+ * These parameters are initialized with default values and can be accessed
+ * throughout the kernel module.
+ * They are used to store configuration settings for various components
+ * of the system, such as camera settings, video settings, and more.
+ * Each parameter is defined as a ConfigParam structure, which includes
+ * the name, address, type, data pointer, and size of the parameter.
+ */
 ConfigParam confLicenseKey[CONFIG_LICENSE_KEY_AMT];
 ConfigParam confFactoryDefaultVersion;
 ConfigParam confProductId;
@@ -74,8 +37,12 @@ ConfigVideo confVideo[CONFIG_VIDEO_AMT];
 ConfigGraphics confGraphics;
 ConfigPTZ confPTZ;
 ConfigBattery confBattery;
+ConfigLighting confLighting;
 
-#ifdef __KERNEL__
+/** Export symbols for use in other modules.
+ * These symbols allow other kernel modules to access the configuration
+ * parameters defined in this module.
+ */
 EXPORT_SYMBOL(confLicenseKey);
 EXPORT_SYMBOL(confFactoryDefaultVersion);
 EXPORT_SYMBOL(confProductId);
@@ -88,13 +55,23 @@ EXPORT_SYMBOL(confVideo);
 EXPORT_SYMBOL(confGraphics);
 EXPORT_SYMBOL(confPTZ);
 EXPORT_SYMBOL(confBattery);
-#endif
+EXPORT_SYMBOL(confLighting);
 
-ConfigParam ConfigParam_Init(const char *name_str, const void *data,
-			     DataType type)
+/**
+ * @brief Initialize a configuration parameter.
+ * This function initializes a ConfigParam structure with the given name,
+ * data, and type. It allocates memory for the data and sets the size
+ * based on the type.
+ *
+ * @param name_str The name of the configuration parameter.
+ * @param data Pointer to the initial data for the parameter.
+ * @param type The data type of the parameter (8-bit, 16-bit, 32-bit, array, string).
+ * @return A ConfigParam structure initialized with the given values.
+ */
+ConfigParam ConfigParam_Init(const char *name_str, const void *data, DataType type)
 {
 	ConfigParam param;
-	param.name = LVI_STRDUP(name_str);
+	param.name = STRDUP(name_str);
 	if (!param.name) {
 		param.size = 0;
 		param.address = 0;
@@ -125,7 +102,7 @@ ConfigParam ConfigParam_Init(const char *name_str, const void *data,
 		}
 		break;
 	default:
-		LVI_FREE((void *)param.name);
+		kfree((void *)param.name);
 		param.name = NULL;
 		param.size = 0;
 		param.address = 0;
@@ -133,9 +110,9 @@ ConfigParam ConfigParam_Init(const char *name_str, const void *data,
 		return param;
 	}
 
-	param.data = (uint8_t *)LVI_MALLOC(param.size);
+	param.data = (uint8_t *)kmalloc(param.size, GFP_KERNEL);
 	if (param.data == NULL) {
-		LVI_FREE((void *)param.name);
+		kfree((void *)param.name);
 		param.name = NULL;
 		param.size = 0;
 		param.address = 0;
@@ -161,8 +138,7 @@ ConfigParam ConfigParam_Init(const char *name_str, const void *data,
 			memcpy(param.data, data, param.size);
 			break;
 		case TYPE_STRING:
-			strncpy((char *)param.data, (const char *)data,
-				param.size - 1);
+			strncpy((char *)param.data, (const char *)data, param.size - 1);
 			param.data[param.size - 1] = '\0';
 			break;
 		default:
@@ -176,6 +152,12 @@ ConfigParam ConfigParam_Init(const char *name_str, const void *data,
 	return param;
 }
 
+/**
+ * @brief Initialize all configuration parameters with default values.
+ * This function MUST be called on boot BEFORE calling ConfigParam_ParseEEPROM.
+ * Initializing these parameter ensures that drivers that include lviconfig_parameters.h
+ * can access the parameters.
+ */
 void ConfigParam_InitAll(void)
 {
 	char name[64];
@@ -186,12 +168,10 @@ void ConfigParam_InitAll(void)
 	addr = 0;
 
 	/* INIT PRODUCT ID */
-	confProductId = ConfigParam_Init("confProductId", &default_numeric_data,
-					 TYPE_32);
+	confProductId = ConfigParam_Init("confProductId", &default_numeric_data, TYPE_32);
 
 	/* INIT FACTORY DEFAULT */
-	confFactoryDefaultVersion = ConfigParam_Init(
-		"confFactoryDefaultVersion", "D12345B", TYPE_STRING);
+	confFactoryDefaultVersion = ConfigParam_Init("confFactoryDefaultVersion", "D12345B", TYPE_STRING);
 
 	/* INIT LICENSE KEYS */
 	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++) {
@@ -210,258 +190,158 @@ void ConfigParam_InitAll(void)
 			string_val = default_string_data;
 			break;
 		}
-#ifdef __KERNEL__
 		snprintf(name, sizeof(name), "confLicenseKey[%u]", i);
-#else
-		sprintf(name, "confLicenseKey[%u]", i);
-#endif
-		confLicenseKey[i] =
-			ConfigParam_Init(name, string_val, TYPE_STRING);
+
+		confLicenseKey[i] = ConfigParam_Init(name, string_val, TYPE_STRING);
 	}
 
 	/* INIT FUNCTIONS */
-#ifdef __KERNEL__
 	snprintf(name, sizeof(name), "confFunctions");
-#else
-	sprintf(name, "confFunctions");
-#endif
-	confFunctions.name = LVI_STRDUP(name);
-	confFunctions.Seesaw =
-		ConfigParam_Init("Seesaw", &default_numeric_data, TYPE_8);
-	confFunctions.ReferenceLine = ConfigParam_Init(
-		"ReferenceLine", &default_numeric_data, TYPE_8);
-	confFunctions.Curtain =
-		ConfigParam_Init("Curtain", &default_numeric_data, TYPE_8);
+
+	confFunctions.name = STRDUP(name);
+	confFunctions.Seesaw = ConfigParam_Init("Seesaw", &default_numeric_data, TYPE_8);
+	confFunctions.ReferenceLine = ConfigParam_Init("ReferenceLine", &default_numeric_data, TYPE_8);
+	confFunctions.Curtain = ConfigParam_Init("Curtain", &default_numeric_data, TYPE_8);
 
 	/* INIT COLOR */
 	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
-#ifdef __KERNEL__
 		snprintf(name, sizeof(name), "confColor[%u]", i);
-#else
-		sprintf(name, "confColor[%u]", i);
-#endif
-		confColor[i].name = LVI_STRDUP(name);
-		confColor[i].Group = ConfigParam_Init(
-			"Group", &default_numeric_data, TYPE_32);
-		confColor[i].ArtificialColorPoint1 =
-			ConfigParam_Init("ArtificialColorPoint1",
-					 &default_numeric_data, TYPE_32);
-		confColor[i].ArtificialColorPoint2 =
-			ConfigParam_Init("ArtificialColorPoint2",
-					 &default_numeric_data, TYPE_32);
-		confColor[i].ArtificialColorPoint3 =
-			ConfigParam_Init("ArtificialColorPoint3",
-					 &default_numeric_data, TYPE_32);
-		confColor[i].ArtificialColorPoint4 =
-			ConfigParam_Init("ArtificialColorPoint4",
-					 &default_numeric_data, TYPE_32);
-		confColor[i].CameraBackground = ConfigParam_Init(
-			"CameraBackground", &default_numeric_data, TYPE_32);
-		confColor[i].ReferenceLine = ConfigParam_Init(
-			"ReferenceLine", &default_numeric_data, TYPE_32);
-		confColor[i].Restricted = ConfigParam_Init(
-			"Restricted", &default_numeric_data, TYPE_32);
+
+		confColor[i].name = STRDUP(name);
+		confColor[i].Group = ConfigParam_Init("Group", &default_numeric_data, TYPE_32);
+		confColor[i].ArtificialColorPoint1 = ConfigParam_Init("ArtificialColorPoint1", &default_numeric_data, TYPE_32);
+		confColor[i].ArtificialColorPoint2 = ConfigParam_Init("ArtificialColorPoint2", &default_numeric_data, TYPE_32);
+		confColor[i].ArtificialColorPoint3 = ConfigParam_Init("ArtificialColorPoint3", &default_numeric_data, TYPE_32);
+		confColor[i].ArtificialColorPoint4 = ConfigParam_Init("ArtificialColorPoint4", &default_numeric_data, TYPE_32);
+		confColor[i].CameraBackground = ConfigParam_Init("CameraBackground", &default_numeric_data, TYPE_32);
+		confColor[i].ReferenceLine = ConfigParam_Init("ReferenceLine", &default_numeric_data, TYPE_32);
+		confColor[i].Restricted = ConfigParam_Init("Restricted", &default_numeric_data, TYPE_32);
 	}
 
 	/* INIT CAMERA */
-#ifdef __KERNEL__
 	snprintf(name, sizeof(name), "confCamera");
-#else
-	sprintf(name, "confCamera");
-#endif
-	confCamera.name = LVI_STRDUP(name);
-	confCamera.Type =
-		ConfigParam_Init("Type", &default_numeric_data, TYPE_8);
-	confCamera.RGain =
-		ConfigParam_Init("RGain", &default_numeric_data, TYPE_8);
-	confCamera.BGain =
-		ConfigParam_Init("BGain", &default_numeric_data, TYPE_8);
-	confCamera.FirstLine =
-		ConfigParam_Init("FirstLine", &default_numeric_data, TYPE_16);
-	confCamera.FirstPixel =
-		ConfigParam_Init("FirstPixel", &default_numeric_data, TYPE_16);
-	confCamera.UsableLines =
-		ConfigParam_Init("UsableLines", &default_numeric_data, TYPE_16);
-	confCamera.UsablePixels = ConfigParam_Init(
-		"UsablePixels", &default_numeric_data, TYPE_16);
-	confCamera.UsableRatio =
-		ConfigParam_Init("UsableRatio", &default_numeric_data, TYPE_16);
-	confCamera.Interface =
-		ConfigParam_Init("Interface", &default_numeric_data, TYPE_8);
-	confCamera.NaturalColorShutterTime = ConfigParam_Init(
-		"NaturalColorShutterTime", &default_numeric_data, TYPE_8);
-	confCamera.NaturalColorBrightness = ConfigParam_Init(
-		"NaturalColorBrightness", &default_numeric_data, TYPE_8);
-	confCamera.NaturalColorIris = ConfigParam_Init(
-		"NaturalColorIris", &default_numeric_data, TYPE_8);
-	confCamera.NaturalColorExposureCompensation =
-		ConfigParam_Init("NaturalColorExposureCompensation",
-				 &default_numeric_data, TYPE_8);
-	confCamera.NaturalColorGainPeak = ConfigParam_Init(
-		"NaturalColorGainPeak", &default_numeric_data, TYPE_8);
-	confCamera.ArtificialColorShutterTime = ConfigParam_Init(
-		"ArtificialColorShutterTime", &default_numeric_data, TYPE_8);
-	confCamera.ArtificialColorBrightness = ConfigParam_Init(
-		"ArtificialColorBrightness", &default_numeric_data, TYPE_8);
-	confCamera.ArtificialColorIris = ConfigParam_Init(
-		"ArtificialColorIris", &default_numeric_data, TYPE_8);
-	confCamera.ArtificialColorExposureCompensation =
-		ConfigParam_Init("ArtificialColorExposureCompensation",
-				 &default_numeric_data, TYPE_8);
-	confCamera.ArtificialColorGainPeak = ConfigParam_Init(
-		"ArtificialColorGainPeak", &default_numeric_data, TYPE_8);
+
+	confCamera.name = STRDUP(name);
+	confCamera.Type = ConfigParam_Init("Type", &default_numeric_data, TYPE_8);
+	confCamera.RGain = ConfigParam_Init("RGain", &default_numeric_data, TYPE_8);
+	confCamera.BGain = ConfigParam_Init("BGain", &default_numeric_data, TYPE_8);
+	confCamera.FirstLine = ConfigParam_Init("FirstLine", &default_numeric_data, TYPE_16);
+	confCamera.FirstPixel = ConfigParam_Init("FirstPixel", &default_numeric_data, TYPE_16);
+	confCamera.UsableLines = ConfigParam_Init("UsableLines", &default_numeric_data, TYPE_16);
+	confCamera.UsablePixels = ConfigParam_Init("UsablePixels", &default_numeric_data, TYPE_16);
+	confCamera.UsableRatio = ConfigParam_Init("UsableRatio", &default_numeric_data, TYPE_16);
+	confCamera.Interface = ConfigParam_Init("Interface", &default_numeric_data, TYPE_8);
+	confCamera.NaturalColorShutterTime = ConfigParam_Init("NaturalColorShutterTime", &default_numeric_data, TYPE_8);
+	confCamera.NaturalColorBrightness = ConfigParam_Init("NaturalColorBrightness", &default_numeric_data, TYPE_8);
+	confCamera.NaturalColorIris = ConfigParam_Init("NaturalColorIris", &default_numeric_data, TYPE_8);
+	confCamera.NaturalColorExposureCompensation = ConfigParam_Init("NaturalColorExposureCompensation", &default_numeric_data, TYPE_8);
+	confCamera.NaturalColorGainPeak = ConfigParam_Init("NaturalColorGainPeak", &default_numeric_data, TYPE_8);
+	confCamera.ArtificialColorShutterTime = ConfigParam_Init("ArtificialColorShutterTime", &default_numeric_data, TYPE_8);
+	confCamera.ArtificialColorBrightness = ConfigParam_Init("ArtificialColorBrightness", &default_numeric_data, TYPE_8);
+	confCamera.ArtificialColorIris = ConfigParam_Init("ArtificialColorIris", &default_numeric_data, TYPE_8);
+	confCamera.ArtificialColorExposureCompensation = ConfigParam_Init("ArtificialColorExposureCompensation", &default_numeric_data, TYPE_8);
+	confCamera.ArtificialColorGainPeak = ConfigParam_Init("ArtificialColorGainPeak", &default_numeric_data, TYPE_8);
 
 	/* INIT CAMERA MODE */
 	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
-#ifdef __KERNEL__
 		snprintf(name, sizeof(name), "confCameraMode[%u]", i);
-#else
-		sprintf(name, "confCameraMode[%u]", i);
-#endif
-		confCameraMode[i].name = LVI_STRDUP(name);
-		confCameraMode[i].ZoomMin = ConfigParam_Init(
-			"ZoomMin", &default_numeric_data, TYPE_16);
-		confCameraMode[i].ZoomMax = ConfigParam_Init(
-			"ZoomMax", &default_numeric_data, TYPE_16);
-		confCameraMode[i].ZoomSpeed = ConfigParam_Init(
-			"ZoomSpeed", &default_numeric_data, TYPE_16);
-		confCameraMode[i].Focus = ConfigParam_Init(
-			"Focus", &default_numeric_data, TYPE_32);
-		confCameraMode[i].FocusRangeMin = ConfigParam_Init(
-			"FocusRangeMin", &default_numeric_data, TYPE_32);
-		confCameraMode[i].FocusRangeMax = ConfigParam_Init(
-			"FocusRangeMax", &default_numeric_data, TYPE_32);
-		confCameraMode[i].FocusSpeed = ConfigParam_Init(
-			"FocusSpeed", &default_numeric_data, TYPE_32);
-		confCameraMode[i].NaturalColorExposure = ConfigParam_Init(
-			"NaturalColorExposure", &default_numeric_data, TYPE_32);
-		confCameraMode[i].ArtificialColorExposure =
-			ConfigParam_Init("ArtificialColorExposure",
-					 &default_numeric_data, TYPE_32);
-		confCameraMode[i].WhiteBalance = ConfigParam_Init(
-			"WhiteBalance", &default_numeric_data, TYPE_32);
+
+		confCameraMode[i].name = STRDUP(name);
+		confCameraMode[i].Zoom = ConfigParam_Init("Zoom", &default_numeric_data, TYPE_16);
+		confCameraMode[i].ZoomMin = ConfigParam_Init("ZoomMin", &default_numeric_data, TYPE_16);
+		confCameraMode[i].ZoomMax = ConfigParam_Init("ZoomMax", &default_numeric_data, TYPE_16);
+		confCameraMode[i].ZoomSpeed = ConfigParam_Init("ZoomSpeed", &default_numeric_data, TYPE_16);
+		confCameraMode[i].Focus = ConfigParam_Init("Focus", &default_numeric_data, TYPE_32);
+		confCameraMode[i].FocusMin = ConfigParam_Init("FocusMin", &default_numeric_data, TYPE_32);
+		confCameraMode[i].FocusMax = ConfigParam_Init("FocusMax", &default_numeric_data, TYPE_32);
+		confCameraMode[i].FocusSpeed = ConfigParam_Init("FocusSpeed", &default_numeric_data, TYPE_32);
+		confCameraMode[i].NaturalColorExposure = ConfigParam_Init("NaturalColorExposure", &default_numeric_data, TYPE_32);
+		confCameraMode[i].ArtificialColorExposure = ConfigParam_Init("ArtificialColorExposure", &default_numeric_data, TYPE_32);
+		confCameraMode[i].WhiteBalance = ConfigParam_Init("WhiteBalance", &default_numeric_data, TYPE_32);
 	}
 
 	/* INIT MONITOR MODE */
 	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
-#ifdef __KERNEL__
 		snprintf(name, sizeof(name), "confMonitorMode[%u]", i);
-#else
-		sprintf(name, "confMonitorMode[%u]", i);
-#endif
-		confMonitorMode[i].name = LVI_STRDUP(name);
-		confMonitorMode[i].ColorGainR = ConfigParam_Init(
-			"ColorGainR", &default_numeric_data, TYPE_8);
-		confMonitorMode[i].ColorGainG = ConfigParam_Init(
-			"ColorGainG", &default_numeric_data, TYPE_8);
-		confMonitorMode[i].ColorGainB = ConfigParam_Init(
-			"ColorGainB", &default_numeric_data, TYPE_8);
-		confMonitorMode[i].Contrast = ConfigParam_Init(
-			"Contrast", &default_numeric_data, TYPE_8);
-		confMonitorMode[i].Brightness = ConfigParam_Init(
-			"Brightness", &default_numeric_data, TYPE_8);
-		confMonitorMode[i].Saturation = ConfigParam_Init(
-			"Saturation", &default_numeric_data, TYPE_8);
+
+		confMonitorMode[i].name = STRDUP(name);
+		confMonitorMode[i].ColorGainR = ConfigParam_Init("ColorGainR", &default_numeric_data, TYPE_8);
+		confMonitorMode[i].ColorGainG = ConfigParam_Init("ColorGainG", &default_numeric_data, TYPE_8);
+		confMonitorMode[i].ColorGainB = ConfigParam_Init("ColorGainB", &default_numeric_data, TYPE_8);
+		confMonitorMode[i].Contrast = ConfigParam_Init("Contrast", &default_numeric_data, TYPE_8);
+		confMonitorMode[i].Brightness = ConfigParam_Init("Brightness", &default_numeric_data, TYPE_8);
+		confMonitorMode[i].Saturation = ConfigParam_Init("Saturation", &default_numeric_data, TYPE_8);
 	}
 
 	/* INIT VIDEO */
 	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
-#ifdef __KERNEL__
 		snprintf(name, sizeof(name), "confVideo[%u]", i);
-#else
-		sprintf(name, "confVideo[%u]", i);
-#endif
-		confVideo[i].name = LVI_STRDUP(name);
-		confVideo[i].PaletteSelection = ConfigParam_Init(
-			"PaletteSelection", &default_numeric_data, TYPE_8);
-		confVideo[i].Type =
-			ConfigParam_Init("Type", &default_numeric_data, TYPE_8);
-		confVideo[i].LinesPerFrame = ConfigParam_Init(
-			"LinesPerFrame", &default_numeric_data, TYPE_16);
-		confVideo[i].LinesActiveInCompletePicture =
-			ConfigParam_Init("LinesActiveInCompletePicture",
-					 &default_numeric_data, TYPE_16);
-		confVideo[i].FirstActiveLine = ConfigParam_Init(
-			"FirstActiveLine", &default_numeric_data, TYPE_8);
-		confVideo[i].HorizontalTotalLength =
-			ConfigParam_Init("HorizontalTotalLength",
-					 &default_numeric_data, TYPE_16);
-		confVideo[i].HorizontalSyncLength = ConfigParam_Init(
-			"HorizontalSyncLength", &default_numeric_data, TYPE_8);
-		confVideo[i].HorizontalActiveVideoStart =
-			ConfigParam_Init("HorizontalActiveVideoStart",
-					 &default_numeric_data, TYPE_8);
-		confVideo[i].HorizontalActiveVideoLength =
-			ConfigParam_Init("HorizontalActiveVideoLength",
-					 &default_numeric_data, TYPE_16);
-		confVideo[i].VerticalSyncLength = ConfigParam_Init(
-			"VerticalSyncLength", &default_numeric_data, TYPE_8);
-		confVideo[i].VoltageDac = ConfigParam_Init(
-			"VoltageDac", &default_numeric_data, TYPE_8);
-		confVideo[i].SyncRgb = ConfigParam_Init(
-			"SyncRgb", &default_numeric_data, TYPE_8);
-		confVideo[i].AspectRatio = ConfigParam_Init(
-			"AspectRatio", &default_numeric_data, TYPE_16);
+
+		confVideo[i].name = STRDUP(name);
+		confVideo[i].PaletteSelection = ConfigParam_Init("PaletteSelection", &default_numeric_data, TYPE_8);
+		confVideo[i].Type = ConfigParam_Init("Type", &default_numeric_data, TYPE_8);
+		confVideo[i].LinesPerFrame = ConfigParam_Init("LinesPerFrame", &default_numeric_data, TYPE_16);
+		confVideo[i].LinesActiveInCompletePicture = ConfigParam_Init("LinesActiveInCompletePicture", &default_numeric_data, TYPE_16);
+		confVideo[i].FirstActiveLine = ConfigParam_Init("FirstActiveLine", &default_numeric_data, TYPE_8);
+		confVideo[i].HorizontalTotalLength = ConfigParam_Init("HorizontalTotalLength", &default_numeric_data, TYPE_16);
+		confVideo[i].HorizontalSyncLength = ConfigParam_Init("HorizontalSyncLength", &default_numeric_data, TYPE_8);
+		confVideo[i].HorizontalActiveVideoStart = ConfigParam_Init("HorizontalActiveVideoStart", &default_numeric_data, TYPE_8);
+		confVideo[i].HorizontalActiveVideoLength = ConfigParam_Init("HorizontalActiveVideoLength", &default_numeric_data, TYPE_16);
+		confVideo[i].VerticalSyncLength = ConfigParam_Init("VerticalSyncLength", &default_numeric_data, TYPE_8);
+		confVideo[i].VoltageDac = ConfigParam_Init("VoltageDac", &default_numeric_data, TYPE_8);
+		confVideo[i].SyncRgb = ConfigParam_Init("SyncRgb", &default_numeric_data, TYPE_8);
+		confVideo[i].AspectRatio = ConfigParam_Init("AspectRatio", &default_numeric_data, TYPE_16);
 	}
 
 	/* INIT GRAPHICS */
-#ifdef __KERNEL__
 	snprintf(name, sizeof(name), "confGraphics");
-#else
-	sprintf(name, "confGraphics");
-#endif
-	confGraphics.name = LVI_STRDUP(name);
-	confGraphics.ReferenceLineWidth = ConfigParam_Init(
-		"ReferenceLineWidth", &default_numeric_data, TYPE_16);
-	confGraphics.ReferenceLineLowSpeed = ConfigParam_Init(
-		"ReferenceLineLowSpeed", &default_numeric_data, TYPE_16);
-	confGraphics.ReferenceLineHighSpeed = ConfigParam_Init(
-		"ReferenceLineHighSpeed", &default_numeric_data, TYPE_16);
-	confGraphics.ReferenceLineHighSpeedDelay = ConfigParam_Init(
-		"ReferenceLineHighSpeedDelay", &default_numeric_data, TYPE_16);
-	confGraphics.ReferenceLineSwitchDelay = ConfigParam_Init(
-		"ReferenceLineSwitchDelay", &default_numeric_data, TYPE_16);
-	confGraphics.PosNegSpeed =
-		ConfigParam_Init("PosNegSpeed", &default_numeric_data, TYPE_16);
+
+	confGraphics.name = STRDUP(name);
+	confGraphics.ReferenceLineWidth = ConfigParam_Init("ReferenceLineWidth", &default_numeric_data, TYPE_16);
+	confGraphics.ReferenceLineLowSpeed = ConfigParam_Init("ReferenceLineLowSpeed", &default_numeric_data, TYPE_16);
+	confGraphics.ReferenceLineHighSpeed = ConfigParam_Init("ReferenceLineHighSpeed", &default_numeric_data, TYPE_16);
+	confGraphics.ReferenceLineHighSpeedDelay = ConfigParam_Init("ReferenceLineHighSpeedDelay", &default_numeric_data, TYPE_16);
+	confGraphics.ReferenceLineSwitchDelay = ConfigParam_Init("ReferenceLineSwitchDelay", &default_numeric_data, TYPE_16);
+	confGraphics.PosNegSpeed = ConfigParam_Init("PosNegSpeed", &default_numeric_data, TYPE_16);
 
 	/* INIT PTZ */
-#ifdef __KERNEL__
 	snprintf(name, sizeof(name), "confPTZ");
-#else
-	sprintf(name, "confPTZ");
-#endif
-	confPTZ.name = LVI_STRDUP(name);
-	confPTZ.LimitUp =
-		ConfigParam_Init("LimitUp", &default_numeric_data, TYPE_32);
-	confPTZ.LimitDown =
-		ConfigParam_Init("LimitDown", &default_numeric_data, TYPE_32);
-	confPTZ.LimitLeft =
-		ConfigParam_Init("LimitLeft", &default_numeric_data, TYPE_32);
-	confPTZ.LimitRight =
-		ConfigParam_Init("LimitRight", &default_numeric_data, TYPE_32);
+
+	confPTZ.name = STRDUP(name);
+	confPTZ.LimitUp = ConfigParam_Init("LimitUp", &default_numeric_data, TYPE_32);
+	confPTZ.LimitDown = ConfigParam_Init("LimitDown", &default_numeric_data, TYPE_32);
+	confPTZ.LimitLeft = ConfigParam_Init("LimitLeft", &default_numeric_data, TYPE_32);
+	confPTZ.LimitRight = ConfigParam_Init("LimitRight", &default_numeric_data, TYPE_32);
 
 	/* INIT BATTERY */
-#ifdef __KERNEL__
 	snprintf(name, sizeof(name), "confBattery");
-#else
-	sprintf(name, "confBattery");
-#endif
-	confBattery.name = LVI_STRDUP(name);
-	confBattery.Type =
-		ConfigParam_Init("Type", &default_numeric_data, TYPE_8);
-	confBattery.NominalCapacity = ConfigParam_Init(
-		"NominalCapacity", &default_numeric_data, TYPE_16);
-	confBattery.TempCoefficientCapacity = ConfigParam_Init(
-		"TempCoefficientCapacity", &default_numeric_data, TYPE_16);
-	confBattery.AgeCoefficientCapacity = ConfigParam_Init(
-		"AgeCoefficientCapacity", &default_numeric_data, TYPE_16);
-	confBattery.LowCapacityLimit = ConfigParam_Init(
-		"LowCapacityLimit", &default_numeric_data, TYPE_16);
-}
-#ifdef __KERNEL__
-EXPORT_SYMBOL(ConfigParam_InitAll);
-#endif
 
+	confBattery.name = STRDUP(name);
+	confBattery.Type = ConfigParam_Init("Type", &default_numeric_data, TYPE_8);
+	confBattery.NominalCapacity = ConfigParam_Init("NominalCapacity", &default_numeric_data, TYPE_16);
+	confBattery.TempCoefficientCapacity = ConfigParam_Init("TempCoefficientCapacity", &default_numeric_data, TYPE_16);
+	confBattery.AgeCoefficientCapacity = ConfigParam_Init("AgeCoefficientCapacity", &default_numeric_data, TYPE_16);
+	confBattery.LowCapacityLimit = ConfigParam_Init("LowCapacityLimit", &default_numeric_data, TYPE_16);
+
+	/* INIT LIGHTING */
+	snprintf(name, sizeof(name), "confLighting");
+
+	confLighting.name = STRDUP(name);
+	confLighting.Intensity = ConfigParam_Init("Intensity", &default_numeric_data, TYPE_16);
+	// Additional parameters for lighting can be added here
+}
+EXPORT_SYMBOL(ConfigParam_InitAll);
+
+/**
+ * @brief User-space compatible function to find a parameter by passing a string corresponding to the sought parameter.
+ * Example use:
+ * Some parameters are structured in a way that they can be indexed.
+ * For example, if you want to find the "Zoom" parameter of the primary camera mode,
+ * you can pass the string "confCameraMode[0].Zoom".
+ * If you want to find the "confLicenseKey" parameter, you can pass "confLicenseKey[0]" for the first license key.
+ * 
+ * @param path: The string representing the parameter to find.
+ * @return: Parameter corresponding to the passed string (if valid) */
 ConfigParam *ConfigParam_FindByName(const char *path)
 {
 	char *path_copy;
@@ -471,7 +351,7 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 	char *strtok_next_str;
 	char *strsep_current_ptr;
 
-	path_copy = LVI_STRDUP(path);
+	path_copy = STRDUP(path);
 	if (!path_copy) {
 		return NULL;
 	}
@@ -479,19 +359,18 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 	strtok_next_str = path_copy;
 	strsep_current_ptr = path_copy;
 
-	token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str, ".[]");
+	token = strsep(&strsep_current_ptr, ".[]");
 	strtok_next_str = NULL;
 
 	if (!token) {
-		LVI_FREE(path_copy);
+		kfree(path_copy);
 		return NULL;
 	}
 
 	if (strcmp(token, "confLicenseKey") == 0) {
-		token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str,
-				     "[]");
+		token = strsep(&strsep_current_ptr, "[]");
 		if (token) {
-			index = LVI_ATOI(token);
+			index = katoi(token);
 			if (index >= 0 && index < CONFIG_LICENSE_KEY_AMT) {
 				param = &confLicenseKey[index];
 			}
@@ -501,7 +380,6 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 	} else if (strcmp(token, "confProductId") == 0) {
 		param = &confProductId;
 	} else if (strcmp(token, "confFunctions") == 0) {
-#ifdef __KERNEL__
 		if (strsep_current_ptr && *strsep_current_ptr == '.') {
 			strsep_current_ptr++; // Consume the dot
 		}
@@ -511,9 +389,7 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 		} else {
 			token = strsep(&strsep_current_ptr, ".");
 		}
-#else
-		token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str, ".");
-#endif
+
 		if (token) {
 			if (strcmp(token, "Seesaw") == 0)
 				param = &confFunctions.Seesaw;
@@ -523,84 +399,53 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 				param = &confFunctions.Curtain;
 		}
 	} else if (strcmp(token, "confColor") == 0) {
-		token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str,
-				     "[]"); // Get index
+		token = strsep(&strsep_current_ptr,
+			       "[]"); // Get index
 		if (token) {
-			index = LVI_ATOI(token);
+			index = katoi(token);
 			if (index >= 0 && index < CONFIG_COLOR_AMT) {
-#ifdef __KERNEL__
-				if (strsep_current_ptr &&
-				    *strsep_current_ptr == '.') {
+				if (strsep_current_ptr && *strsep_current_ptr == '.') {
 					strsep_current_ptr++;
 				}
-				if (!strsep_current_ptr ||
-				    *strsep_current_ptr == '\0') // FIX HERE
+				if (!strsep_current_ptr || *strsep_current_ptr == '\0') // FIX HERE
 				{
 					token = NULL;
 				} else {
-					token = strsep(&strsep_current_ptr,
-						       ".");
+					token = strsep(&strsep_current_ptr, ".");
 				}
-#else
-				token = LVI_STRTOKEN(&strsep_current_ptr,
-						     strtok_next_str, ".");
-#endif
+
 				if (token) {
 					if (strcmp(token, "Group") == 0)
 						param = &confColor[index].Group;
-					else if (strcmp(token,
-							"ArtificialColorPoint1") ==
-						 0)
-						param = &confColor[index]
-								 .ArtificialColorPoint1;
-					else if (strcmp(token,
-							"ArtificialColorPoint2") ==
-						 0)
-						param = &confColor[index]
-								 .ArtificialColorPoint2;
-					else if (strcmp(token,
-							"ArtificialColorPoint3") ==
-						 0)
-						param = &confColor[index]
-								 .ArtificialColorPoint3;
-					else if (strcmp(token,
-							"ArtificialColorPoint4") ==
-						 0)
-						param = &confColor[index]
-								 .ArtificialColorPoint4;
-					else if (strcmp(token,
-							"CameraBackground") ==
-						 0)
-						param = &confColor[index]
-								 .CameraBackground;
-					else if (strcmp(token,
-							"ReferenceLine") == 0)
-						param = &confColor[index]
-								 .ReferenceLine;
-					else if (strcmp(token, "Restricted") ==
-						 0)
-						param = &confColor[index]
-								 .Restricted;
+					else if (strcmp(token, "ArtificialColorPoint1") == 0)
+						param = &confColor[index].ArtificialColorPoint1;
+					else if (strcmp(token, "ArtificialColorPoint2") == 0)
+						param = &confColor[index].ArtificialColorPoint2;
+					else if (strcmp(token, "ArtificialColorPoint3") == 0)
+						param = &confColor[index].ArtificialColorPoint3;
+					else if (strcmp(token, "ArtificialColorPoint4") == 0)
+						param = &confColor[index].ArtificialColorPoint4;
+					else if (strcmp(token, "CameraBackground") == 0)
+						param = &confColor[index].CameraBackground;
+					else if (strcmp(token, "ReferenceLine") == 0)
+						param = &confColor[index].ReferenceLine;
+					else if (strcmp(token, "Restricted") == 0)
+						param = &confColor[index].Restricted;
 				}
 			}
 		}
 	} else if (strcmp(token, "confCamera") == 0) {
-#ifdef __KERNEL__
 		if (strsep_current_ptr && *strsep_current_ptr == '.') {
 			strsep_current_ptr++; // Consume the dot
 		}
 		// Check if the rest of the string is empty or if we are at the end
-		if (!strsep_current_ptr ||
-		    *strsep_current_ptr ==
-			    '\0') // This was one of the warning lines
+		if (!strsep_current_ptr || *strsep_current_ptr == '\0') // This was one of the warning lines
 		{
 			token = NULL; // No more sub-fields
 		} else {
 			token = strsep(&strsep_current_ptr, ".");
 		}
-#else
-		token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str, ".");
-#endif
+
 		if (token) {
 			if (strcmp(token, "Type") == 0)
 				param = &confCamera.Type;
@@ -620,19 +465,14 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 				param = &confCamera.UsableRatio;
 			else if (strcmp(token, "Interface") == 0)
 				param = &confCamera.Interface;
-			else if (strcmp(token, "ArtificialColorShutterTime") ==
-				 0)
+			else if (strcmp(token, "ArtificialColorShutterTime") == 0)
 				param = &confCamera.ArtificialColorShutterTime;
-			else if (strcmp(token, "ArtificialColorBrightness") ==
-				 0)
+			else if (strcmp(token, "ArtificialColorBrightness") == 0)
 				param = &confCamera.ArtificialColorBrightness;
 			else if (strcmp(token, "ArtificialColorIris") == 0)
 				param = &confCamera.ArtificialColorIris;
-			else if (strcmp(token,
-					"ArtificialColorExposureCompensation") ==
-				 0)
-				param = &confCamera
-						 .ArtificialColorExposureCompensation;
+			else if (strcmp(token, "ArtificialColorExposureCompensation") == 0)
+				param = &confCamera.ArtificialColorExposureCompensation;
 			// Added missing confCamera parameters based on error log
 			else if (strcmp(token, "NaturalColorShutterTime") == 0)
 				param = &confCamera.NaturalColorShutterTime;
@@ -640,11 +480,8 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 				param = &confCamera.NaturalColorBrightness;
 			else if (strcmp(token, "NaturalColorIris") == 0)
 				param = &confCamera.NaturalColorIris;
-			else if (strcmp(token,
-					"NaturalColorExposureCompensation") ==
-				 0)
-				param = &confCamera
-						 .NaturalColorExposureCompensation;
+			else if (strcmp(token, "NaturalColorExposureCompensation") == 0)
+				param = &confCamera.NaturalColorExposureCompensation;
 			else if (strcmp(token, "NaturalColorGainPeak") == 0)
 				param = &confCamera.NaturalColorGainPeak;
 			else if (strcmp(token, "ArtificialColorGainPeak") == 0)
@@ -653,204 +490,124 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 	}
 	// Added missing sections based on error log
 	else if (strcmp(token, "confCameraMode") == 0) {
-		token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str,
-				     "[]"); // Get index
+		token = strsep(&strsep_current_ptr,
+			       "[]"); // Get index
 		if (token) {
-			index = LVI_ATOI(token);
+			index = katoi(token);
 			if (index >= 0 && index < CONFIG_CAMERA_MODE_AMT) {
-#ifdef __KERNEL__
-				if (strsep_current_ptr &&
-				    *strsep_current_ptr == '.') {
+				if (strsep_current_ptr && *strsep_current_ptr == '.') {
 					strsep_current_ptr++;
 				}
-				if (!strsep_current_ptr ||
-				    *strsep_current_ptr == '\0') // FIX HERE
+				if (!strsep_current_ptr || *strsep_current_ptr == '\0') // FIX HERE
 				{
 					token = NULL;
 				} else {
-					token = strsep(&strsep_current_ptr,
-						       ".");
+					token = strsep(&strsep_current_ptr, ".");
 				}
-#else
-				token = LVI_STRTOKEN(&strsep_current_ptr,
-						     strtok_next_str, ".");
-#endif
+
 				if (token) {
-					if (strcmp(token, "ZoomMin") == 0)
-						param = &confCameraMode[index]
-								 .ZoomMin;
+					if (strcmp(token, "Zoom") == 0)
+						param = &confCameraMode[index].Zoom;
+					else if (strcmp(token, "ZoomMin") == 0)
+						param = &confCameraMode[index].ZoomMin;
 					else if (strcmp(token, "ZoomMax") == 0)
-						param = &confCameraMode[index]
-								 .ZoomMax;
-					else if (strcmp(token, "ZoomSpeed") ==
-						 0)
-						param = &confCameraMode[index]
-								 .ZoomSpeed;
+						param = &confCameraMode[index].ZoomMax;
+					else if (strcmp(token, "ZoomSpeed") == 0)
+						param = &confCameraMode[index].ZoomSpeed;
 					else if (strcmp(token, "Focus") == 0)
-						param = &confCameraMode[index]
-								 .Focus;
-					else if (strcmp(token,
-							"FocusRangeMin") == 0)
-						param = &confCameraMode[index]
-								 .FocusRangeMin;
-					else if (strcmp(token,
-							"FocusRangeMax") == 0)
-						param = &confCameraMode[index]
-								 .FocusRangeMax;
-					else if (strcmp(token, "FocusSpeed") ==
-						 0)
-						param = &confCameraMode[index]
-								 .FocusSpeed;
-					else if (strcmp(token,
-							"NaturalColorExposure") ==
-						 0)
-						param = &confCameraMode[index]
-								 .NaturalColorExposure;
-					else if (strcmp(token,
-							"ArtificialColorExposure") ==
-						 0)
-						param = &confCameraMode[index]
-								 .ArtificialColorExposure;
-					else if (strcmp(token,
-							"WhiteBalance") == 0)
-						param = &confCameraMode[index]
-								 .WhiteBalance;
+						param = &confCameraMode[index].Focus;
+					else if (strcmp(token, "FocusMin") == 0)
+						param = &confCameraMode[index].FocusMin;
+					else if (strcmp(token, "FocusMax") == 0)
+						param = &confCameraMode[index].FocusMax;
+					else if (strcmp(token, "FocusSpeed") == 0)
+						param = &confCameraMode[index].FocusSpeed;
+					else if (strcmp(token, "NaturalColorExposure") == 0)
+						param = &confCameraMode[index].NaturalColorExposure;
+					else if (strcmp(token, "ArtificialColorExposure") == 0)
+						param = &confCameraMode[index].ArtificialColorExposure;
+					else if (strcmp(token, "WhiteBalance") == 0)
+						param = &confCameraMode[index].WhiteBalance;
 				}
 			}
 		}
 	} else if (strcmp(token, "confMonitorMode") == 0) {
-		token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str,
-				     "[]"); // Get index
+		token = strsep(&strsep_current_ptr, "[]"); // Get index
 		if (token) {
-			index = LVI_ATOI(token);
+			index = katoi(token);
 			if (index >= 0 && index < CONFIG_MONITOR_MODE_AMT) {
-#ifdef __KERNEL__
-				if (strsep_current_ptr &&
-				    *strsep_current_ptr == '.') {
+				if (strsep_current_ptr && *strsep_current_ptr == '.') {
 					strsep_current_ptr++;
 				}
-				if (!strsep_current_ptr ||
-				    *strsep_current_ptr == '\0') // FIX HERE
+				if (!strsep_current_ptr || *strsep_current_ptr == '\0') // FIX HERE
 				{
 					token = NULL;
 				} else {
-					token = strsep(&strsep_current_ptr,
-						       ".");
+					token = strsep(&strsep_current_ptr, ".");
 				}
-#else
-				token = LVI_STRTOKEN(&strsep_current_ptr,
-						     strtok_next_str, ".");
-#endif
+
 				if (token) {
 					if (strcmp(token, "ColorGainR") == 0)
-						param = &confMonitorMode[index]
-								 .ColorGainR;
-					else if (strcmp(token, "ColorGainG") ==
-						 0)
-						param = &confMonitorMode[index]
-								 .ColorGainG;
-					else if (strcmp(token, "ColorGainB") ==
-						 0)
-						param = &confMonitorMode[index]
-								 .ColorGainB;
+						param = &confMonitorMode[index].ColorGainR;
+					else if (strcmp(token, "ColorGainG") == 0)
+						param = &confMonitorMode[index].ColorGainG;
+					else if (strcmp(token, "ColorGainB") == 0)
+						param = &confMonitorMode[index].ColorGainB;
 					else if (strcmp(token, "Contrast") == 0)
-						param = &confMonitorMode[index]
-								 .Contrast;
-					else if (strcmp(token, "Brightness") ==
-						 0)
-						param = &confMonitorMode[index]
-								 .Brightness;
-					else if (strcmp(token, "Saturation") ==
-						 0)
-						param = &confMonitorMode[index]
-								 .Saturation;
+						param = &confMonitorMode[index].Contrast;
+					else if (strcmp(token, "Brightness") == 0)
+						param = &confMonitorMode[index].Brightness;
+					else if (strcmp(token, "Saturation") == 0)
+						param = &confMonitorMode[index].Saturation;
 				}
 			}
 		}
 	} else if (strcmp(token, "confVideo") == 0) {
-		token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str,
-				     "[]"); // Get index
+		token = strsep(&strsep_current_ptr, "[]"); // Get index
 		if (token) {
-			index = LVI_ATOI(token);
+			index = katoi(token);
 			if (index >= 0 && index < CONFIG_VIDEO_AMT) {
-#ifdef __KERNEL__
-				if (strsep_current_ptr &&
-				    *strsep_current_ptr == '.') {
+				if (strsep_current_ptr && *strsep_current_ptr == '.') {
 					strsep_current_ptr++;
 				}
-				if (!strsep_current_ptr ||
-				    *strsep_current_ptr == '\0') // FIX HERE
+				if (!strsep_current_ptr || *strsep_current_ptr == '\0') // FIX HERE
 				{
 					token = NULL;
 				} else {
-					token = strsep(&strsep_current_ptr,
-						       ".");
+					token = strsep(&strsep_current_ptr, ".");
 				}
-#else
-				token = LVI_STRTOKEN(&strsep_current_ptr,
-						     strtok_next_str, ".");
-#endif
+
 				if (token) {
-					if (strcmp(token, "PaletteSelection") ==
-					    0)
-						param = &confVideo[index]
-								 .PaletteSelection;
+					if (strcmp(token, "PaletteSelection") == 0)
+						param = &confVideo[index].PaletteSelection;
 					else if (strcmp(token, "Type") == 0)
 						param = &confVideo[index].Type;
-					else if (strcmp(token,
-							"LinesPerFrame") == 0)
-						param = &confVideo[index]
-								 .LinesPerFrame;
-					else if (strcmp(token,
-							"LinesActiveInCompletePicture") ==
-						 0)
-						param = &confVideo[index]
-								 .LinesActiveInCompletePicture;
-					else if (strcmp(token,
-							"FirstActiveLine") == 0)
-						param = &confVideo[index]
-								 .FirstActiveLine;
-					else if (strcmp(token,
-							"HorizontalTotalLength") ==
-						 0)
-						param = &confVideo[index]
-								 .HorizontalTotalLength;
-					else if (strcmp(token,
-							"HorizontalSyncLength") ==
-						 0)
-						param = &confVideo[index]
-								 .HorizontalSyncLength;
-					else if (strcmp(token,
-							"HorizontalActiveVideoStart") ==
-						 0)
-						param = &confVideo[index]
-								 .HorizontalActiveVideoStart;
-					else if (strcmp(token,
-							"HorizontalActiveVideoLength") ==
-						 0)
-						param = &confVideo[index]
-								 .HorizontalActiveVideoLength;
-					else if (strcmp(token,
-							"VerticalSyncLength") ==
-						 0)
-						param = &confVideo[index]
-								 .VerticalSyncLength;
-					else if (strcmp(token, "VoltageDac") ==
-						 0)
-						param = &confVideo[index]
-								 .VoltageDac;
+					else if (strcmp(token, "LinesPerFrame") == 0)
+						param = &confVideo[index].LinesPerFrame;
+					else if (strcmp(token, "LinesActiveInCompletePicture") == 0)
+						param = &confVideo[index].LinesActiveInCompletePicture;
+					else if (strcmp(token, "FirstActiveLine") == 0)
+						param = &confVideo[index].FirstActiveLine;
+					else if (strcmp(token, "HorizontalTotalLength") == 0)
+						param = &confVideo[index].HorizontalTotalLength;
+					else if (strcmp(token, "HorizontalSyncLength") == 0)
+						param = &confVideo[index].HorizontalSyncLength;
+					else if (strcmp(token, "HorizontalActiveVideoStart") == 0)
+						param = &confVideo[index].HorizontalActiveVideoStart;
+					else if (strcmp(token, "HorizontalActiveVideoLength") == 0)
+						param = &confVideo[index].HorizontalActiveVideoLength;
+					else if (strcmp(token, "VerticalSyncLength") == 0)
+						param = &confVideo[index].VerticalSyncLength;
+					else if (strcmp(token, "VoltageDac") == 0)
+						param = &confVideo[index].VoltageDac;
 					else if (strcmp(token, "SyncRgb") == 0)
-						param = &confVideo[index]
-								 .SyncRgb;
-					else if (strcmp(token, "AspectRatio") ==
-						 0)
-						param = &confVideo[index]
-								 .AspectRatio;
+						param = &confVideo[index].SyncRgb;
+					else if (strcmp(token, "AspectRatio") == 0)
+						param = &confVideo[index].AspectRatio;
 				}
 			}
 		}
 	} else if (strcmp(token, "confGraphics") == 0) {
-#ifdef __KERNEL__
 		if (strsep_current_ptr && *strsep_current_ptr == '.') {
 			strsep_current_ptr++;
 		}
@@ -859,9 +616,7 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 		} else {
 			token = strsep(&strsep_current_ptr, ".");
 		}
-#else
-		token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str, ".");
-#endif
+
 		if (token) {
 			if (strcmp(token, "ReferenceLineWidth") == 0)
 				param = &confGraphics.ReferenceLineWidth;
@@ -869,17 +624,14 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 				param = &confGraphics.ReferenceLineLowSpeed;
 			else if (strcmp(token, "ReferenceLineHighSpeed") == 0)
 				param = &confGraphics.ReferenceLineHighSpeed;
-			else if (strcmp(token, "ReferenceLineHighSpeedDelay") ==
-				 0)
-				param = &confGraphics
-						 .ReferenceLineHighSpeedDelay;
+			else if (strcmp(token, "ReferenceLineHighSpeedDelay") == 0)
+				param = &confGraphics.ReferenceLineHighSpeedDelay;
 			else if (strcmp(token, "ReferenceLineSwitchDelay") == 0)
 				param = &confGraphics.ReferenceLineSwitchDelay;
 			else if (strcmp(token, "PosNegSpeed") == 0)
 				param = &confGraphics.PosNegSpeed;
 		}
 	} else if (strcmp(token, "confPTZ") == 0) {
-#ifdef __KERNEL__
 		if (strsep_current_ptr && *strsep_current_ptr == '.') {
 			strsep_current_ptr++;
 		}
@@ -888,9 +640,7 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 		} else {
 			token = strsep(&strsep_current_ptr, ".");
 		}
-#else
-		token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str, ".");
-#endif
+
 		if (token) {
 			if (strcmp(token, "LimitUp") == 0)
 				param = &confPTZ.LimitUp;
@@ -902,7 +652,6 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 				param = &confPTZ.LimitRight;
 		}
 	} else if (strcmp(token, "confBattery") == 0) {
-#ifdef __KERNEL__
 		if (strsep_current_ptr && *strsep_current_ptr == '.') {
 			strsep_current_ptr++;
 		}
@@ -911,9 +660,7 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 		} else {
 			token = strsep(&strsep_current_ptr, ".");
 		}
-#else
-		token = LVI_STRTOKEN(&strsep_current_ptr, strtok_next_str, ".");
-#endif
+
 		if (token) {
 			if (strcmp(token, "Type") == 0)
 				param = &confBattery.Type;
@@ -926,13 +673,33 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 			else if (strcmp(token, "LowCapacityLimit") == 0)
 				param = &confBattery.LowCapacityLimit;
 		}
+	} else if (strcmp(token, "confLighting") == 0) {
+		if (strsep_current_ptr && *strsep_current_ptr == '.') {
+			strsep_current_ptr++;
+		}
+		if (!strsep_current_ptr || *strsep_current_ptr == '\0') {
+			token = NULL;
+		} else {
+			token = strsep(&strsep_current_ptr, ".");
+		}
+
+		if (token) {
+			if (strcmp(token, "Intensity") == 0)
+				param = &confLighting.Intensity;
+			// Additional parameters for lighting can be added here
+		}
 	}
 	/* Add other config sections as needed */
 
-	LVI_FREE(path_copy);
+	kfree(path_copy);
 	return param;
 }
 
+/**
+ * @brief Set the parameter's data and write the data to EEPROM on the corresponding parameter EEPROM address
+ * @param param: Parameter to be altered
+ * @param data: Data to be written to parameter's data variable
+ */
 void ConfigParam_SetData(ConfigParam *param, const void *data)
 {
 	uint8_t i;
@@ -958,8 +725,7 @@ void ConfigParam_SetData(ConfigParam *param, const void *data)
 		memcpy(param->data, data, param->size);
 		break;
 	case TYPE_STRING:
-		strncpy((char *)param->data, (const char *)data,
-			param->size - 1);
+		strncpy((char *)param->data, (const char *)data, param->size - 1);
 		param->data[param->size - 1] = '\0';
 		break;
 	default:
@@ -967,15 +733,16 @@ void ConfigParam_SetData(ConfigParam *param, const void *data)
 	}
 
 	for (i = 0; i < param->size; i++) {
-		if (platform_eeprom_write(param->address + i, param->data[i]) !=
-		    0) {
+		if (lviconfig_platform_eeprom_write(param->address + i, param->data[i]) != 0) {
 		}
 	}
 }
 
 /**
- * Reads the data from the EEPROM for a given ConfigParam.
+ * @brief Reads the data from the EEPROM for a given ConfigParam.
  * Returns a pointer to the data if successful, or NULL if there was an error.
+ * @param param: The ConfigParam to read data from.
+ * @return: Pointer to the data if successful, NULL if there was an error.
  */
 const void *ConfigParam_GetData(ConfigParam *param)
 {
@@ -987,8 +754,7 @@ const void *ConfigParam_GetData(ConfigParam *param)
 
 	read_success = 1;
 	for (i = 0; i < param->size; i++) {
-		if (platform_eeprom_read(param->address + i, &param->data[i]) !=
-		    0) {
+		if (lviconfig_platform_eeprom_read(param->address + i, &param->data[i]) != 0) {
 			read_success = 0;
 			break;
 		}
@@ -1000,6 +766,14 @@ const void *ConfigParam_GetData(ConfigParam *param)
 	return (const void *)param->data;
 }
 
+/**
+ * @brief Parses the EEPROM to load configuration parameters.
+ * This function reads all configuration parameters from the EEPROM
+ * and initializes them with the stored values.
+ * 
+ * This function MUST be called AFTER the ConfigParam_InitAll() function
+ * to ensure that all parameters are initialized before reading from EEPROM.
+ */
 void ConfigParam_ParseEEPROM(void)
 {
 	uint8_t i;
@@ -1055,12 +829,13 @@ void ConfigParam_ParseEEPROM(void)
 
 	// confCameraMode
 	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
+		ConfigParam_GetData(&confCameraMode[i].Zoom);
 		ConfigParam_GetData(&confCameraMode[i].ZoomMin);
 		ConfigParam_GetData(&confCameraMode[i].ZoomMax);
 		ConfigParam_GetData(&confCameraMode[i].ZoomSpeed);
 		ConfigParam_GetData(&confCameraMode[i].Focus);
-		ConfigParam_GetData(&confCameraMode[i].FocusRangeMin);
-		ConfigParam_GetData(&confCameraMode[i].FocusRangeMax);
+		ConfigParam_GetData(&confCameraMode[i].FocusMin);
+		ConfigParam_GetData(&confCameraMode[i].FocusMax);
 		ConfigParam_GetData(&confCameraMode[i].FocusSpeed);
 		ConfigParam_GetData(&confCameraMode[i].NaturalColorExposure);
 		ConfigParam_GetData(&confCameraMode[i].ArtificialColorExposure);
@@ -1114,13 +889,20 @@ void ConfigParam_ParseEEPROM(void)
 	ConfigParam_GetData(&confBattery.TempCoefficientCapacity);
 	ConfigParam_GetData(&confBattery.AgeCoefficientCapacity);
 	ConfigParam_GetData(&confBattery.LowCapacityLimit);
-}
-#ifdef __KERNEL__
-EXPORT_SYMBOL(ConfigParam_ParseEEPROM);
-#endif
 
-#ifdef __KERNEL__
-// Kernel space stubs for print functions
+	// confLighting
+	ConfigParam_GetData(&confLighting.Intensity);
+	// Additional parameters for lighting can be added here
+}
+EXPORT_SYMBOL(ConfigParam_ParseEEPROM);
+
+/**
+ * @brief Prints the configuration parameter to the kernel log.
+ * This function prints the parameter's name, address, size, type, and value.
+ * It handles different types of parameters (8-bit, 16-bit, 32-bit, string, array).
+ * 
+ * @param param: The ConfigParam to print.
+ */
 void ConfigParam_PrintParam(ConfigParam *param)
 {
 	const void *data;
@@ -1129,64 +911,48 @@ void ConfigParam_PrintParam(ConfigParam *param)
 	const uint8_t *array_data;
 
 	if (!param) {
-		LVI_PRINT("ConfigParam_PrintParam: Parameter is NULL\n");
+		pr_info("[%s] Parameter is NULL\n", __func__);
 		return;
 	}
 	// It's good practice to also check param->name, though ConfigParam_InitAll should set it.
 	if (!param->name) {
-		LVI_PRINT(
-			"ConfigParam_PrintParam: Parameter name is NULL (Addr: 0x%04X)\n",
-			param->address);
+		pr_info("[%s] Parameter name is NULL (Addr: 0x%04X)\n", __func__, param->address);
 		// Still try to print what we can if data is available
 	}
 
 	data = ConfigParam_GetData(param); // Reads from EEPROM
 	if (!data) {
-		LVI_PRINT(
-			"ConfigParam_PrintParam: No data for %s (Addr: 0x%04X)\n",
-			param->name ? param->name : "UNKNOWN", param->address);
+		pr_info("[%s] No data for %s (Addr: 0x%04X)\n", __func__, param->name ? param->name : "UNKNOWN", param->address);
 		return;
 	}
 
 	switch (param->type) {
 	case TYPE_8:
-		LVI_PRINT(
-			"\tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: TYPE_8         Value: 0x%02X\n",
-			name_width, param->name ? param->name : "N/A",
-			param->address, param->size, *(const uint8_t *)data);
+		pr_info("[%s] \tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: TYPE_8         Value: 0x%02X\n", __func__, name_width, param->name ? param->name : "N/A", param->address, param->size,
+			*(const uint8_t *)data);
 		break;
 	case TYPE_16:
-		LVI_PRINT(
-			"\tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: TYPE_16        Value: 0x%04X\n",
-			name_width, param->name ? param->name : "N/A",
-			param->address, param->size, *(const uint16_t *)data);
+		pr_info("[%s] \tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: TYPE_16        Value: 0x%04X\n", __func__, name_width, param->name ? param->name : "N/A", param->address, param->size,
+			*(const uint16_t *)data);
 		break;
 	case TYPE_32:
-		LVI_PRINT(
-			"\tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: TYPE_32        Value: 0x%08X\n",
-			name_width, param->name ? param->name : "N/A",
-			param->address, param->size, *(const uint32_t *)data);
+		pr_info("[%s] \tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: TYPE_32        Value: 0x%08X\n", __func__, name_width, param->name ? param->name : "N/A", param->address, param->size,
+			*(const uint32_t *)data);
 		break;
 	case TYPE_STRING:
-		LVI_PRINT(
-			"\tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: TYPE_STRING    Value: \"%s\"\n",
-			name_width, param->name ? param->name : "N/A",
-			param->address, param->size, (const char *)data);
+		pr_info("[%s] \tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: TYPE_STRING    Value: \"%s\"\n", __func__, name_width, param->name ? param->name : "N/A", param->address, param->size,
+			(const char *)data);
 		break;
 	case TYPE_ARRAY:
-		// Start the line using LVI_PRINT (which might add KERN_INFO etc.)
-		LVI_PRINT(
-			"\tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: TYPE_ARRAY     Value: [",
-			name_width, param->name ? param->name : "N/A",
-			param->address, param->size); // No newline here
+		// Start the line using pr_info (which might add KERN_INFO etc.)
+		pr_info("[%s] \tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: TYPE_ARRAY     Value: [", __func__, name_width, param->name ? param->name : "N/A", param->address,
+			param->size); // No newline here
 
 		array_data = (const uint8_t *)data;
 		for (i = 0; i < param->size; ++i) {
 			// Continue the line with KERN_CONT
 			// Limit printed elements to avoid excessive log spam for very large arrays
-			if (i >= 32 &&
-			    param->size >
-				    36) { // Print up to ~32 elements, then "..."
+			if (i >= 32 && param->size > 36) { // Print up to ~32 elements, then "..."
 				printk(KERN_CONT "...");
 				break;
 			}
@@ -1198,53 +964,46 @@ void ConfigParam_PrintParam(ConfigParam *param)
 		printk(KERN_CONT "]\n"); // End the line
 		break;
 	default:
-		LVI_PRINT(
-			"\tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: UNKNOWN TYPE\n",
-			name_width, param->name ? param->name : "N/A",
-			param->address, param->size);
+		pr_info("[%s] \tParameter: %-*s Addr: 0x%04X  Size: %2u  Type: UNKNOWN TYPE\n", __func__, name_width, param->name ? param->name : "N/A", param->address, param->size);
 		break;
 	}
 }
 
+/**
+ * @brief Prints all configuration parameters to the kernel log.
+ * This function iterates through all configuration parameters and prints
+ * their details using ConfigParam_PrintParam.
+ */
 void ConfigParam_PrintAll(void)
 {
 	int i;
 
-	LVI_PRINT("[%s] --- All Configuration Parameters (Kernel) ---\n",
-		  __func__);
+	pr_info("[%s] --- All Configuration Parameters (Kernel) ---\n", __func__);
 
 	// confProductId
-	LVI_PRINT("[%s] --- ProductID (%s) ---\n", __func__,
-		  confProductId.name ? confProductId.name : "N/A");
+	pr_info("[%s] --- ProductID (%s) ---\n", __func__, confProductId.name ? confProductId.name : "N/A");
 	ConfigParam_PrintParam(&confProductId);
 
 	// confFactoryDefaultVersion
-	LVI_PRINT("[%s] --- FactoryDefaultVersion (%s) ---\n", __func__,
-		  confFactoryDefaultVersion.name ?
-			  confFactoryDefaultVersion.name :
-			  "N/A");
+	pr_info("[%s] --- FactoryDefaultVersion (%s) ---\n", __func__, confFactoryDefaultVersion.name ? confFactoryDefaultVersion.name : "N/A");
 	ConfigParam_PrintParam(&confFactoryDefaultVersion);
 
 	// confLicenseKey
-	LVI_PRINT("[%s] --- LicenseKey ---\n", __func__);
+	pr_info("[%s] --- LicenseKey ---\n", __func__);
 	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++) {
-		// Assuming confLicenseKey[i].name is set during init, e.g. "LicenseKey[0]"
-		// ConfigParam_PrintParam will print its specific name.
 		ConfigParam_PrintParam(&confLicenseKey[i]);
 	}
 
 	// confFunctions
-	LVI_PRINT("[%s] --- Functions (%s) ---\n", __func__,
-		  confFunctions.name ? confFunctions.name : "N/A");
+	pr_info("[%s] --- Functions (%s) ---\n", __func__, confFunctions.name ? confFunctions.name : "N/A");
 	ConfigParam_PrintParam(&confFunctions.Seesaw);
 	ConfigParam_PrintParam(&confFunctions.ReferenceLine);
 	ConfigParam_PrintParam(&confFunctions.Curtain);
 
 	// confColor
-	LVI_PRINT("[%s] --- Color Profiles (confColor) ---\n", __func__);
+	pr_info("[%s] --- Color Profiles (confColor) ---\n", __func__);
 	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
-		LVI_PRINT("[%s]   -- Color Profile [%d] (%s) --\n", __func__, i,
-			  confColor[i].name ? confColor[i].name : "N/A");
+		pr_info("[%s]   -- Color Profile [%d] (%s) --\n", __func__, i, confColor[i].name ? confColor[i].name : "N/A");
 		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint1);
 		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint2);
 		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint3);
@@ -1255,8 +1014,7 @@ void ConfigParam_PrintAll(void)
 	}
 
 	// confCamera
-	LVI_PRINT("[%s] --- Camera (%s) ---\n", __func__,
-		  confCamera.name ? confCamera.name : "N/A");
+	pr_info("[%s] --- Camera (%s) ---\n", __func__, confCamera.name ? confCamera.name : "N/A");
 	ConfigParam_PrintParam(&confCamera.Type);
 	ConfigParam_PrintParam(&confCamera.RGain);
 	ConfigParam_PrintParam(&confCamera.BGain);
@@ -1278,30 +1036,26 @@ void ConfigParam_PrintAll(void)
 	ConfigParam_PrintParam(&confCamera.ArtificialColorGainPeak);
 
 	// confCameraMode
-	LVI_PRINT("[%s] --- Camera Modes (confCameraMode) ---\n", __func__);
+	pr_info("[%s] --- Camera Modes (confCameraMode) ---\n", __func__);
 	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
-		LVI_PRINT("[%s]   -- Camera Mode [%d] (%s) --\n", __func__, i,
-			  confCameraMode[i].name ? confCameraMode[i].name :
-						   "N/A");
+		pr_info("[%s]   -- Camera Mode [%d] (%s) --\n", __func__, i, confCameraMode[i].name ? confCameraMode[i].name : "N/A");
+		ConfigParam_PrintParam(&confCameraMode[i].Zoom);
 		ConfigParam_PrintParam(&confCameraMode[i].ZoomMin);
 		ConfigParam_PrintParam(&confCameraMode[i].ZoomMax);
 		ConfigParam_PrintParam(&confCameraMode[i].ZoomSpeed);
 		ConfigParam_PrintParam(&confCameraMode[i].Focus);
-		ConfigParam_PrintParam(&confCameraMode[i].FocusRangeMin);
-		ConfigParam_PrintParam(&confCameraMode[i].FocusRangeMax);
+		ConfigParam_PrintParam(&confCameraMode[i].FocusMin);
+		ConfigParam_PrintParam(&confCameraMode[i].FocusMax);
 		ConfigParam_PrintParam(&confCameraMode[i].FocusSpeed);
 		ConfigParam_PrintParam(&confCameraMode[i].NaturalColorExposure);
-		ConfigParam_PrintParam(
-			&confCameraMode[i].ArtificialColorExposure);
+		ConfigParam_PrintParam(&confCameraMode[i].ArtificialColorExposure);
 		ConfigParam_PrintParam(&confCameraMode[i].WhiteBalance);
 	}
 
 	// confMonitorMode
-	LVI_PRINT("[%s] --- Monitor Modes (confMonitorMode) ---\n", __func__);
+	pr_info("[%s] --- Monitor Modes (confMonitorMode) ---\n", __func__);
 	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
-		LVI_PRINT("[%s]   -- Monitor Mode [%d] (%s) --\n", __func__, i,
-			  confMonitorMode[i].name ? confMonitorMode[i].name :
-						    "N/A");
+		pr_info("[%s]   -- Monitor Mode [%d] (%s) --\n", __func__, i, confMonitorMode[i].name ? confMonitorMode[i].name : "N/A");
 		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainR);
 		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainG);
 		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainB);
@@ -1311,22 +1065,18 @@ void ConfigParam_PrintAll(void)
 	}
 
 	// confVideo
-	LVI_PRINT("[%s] --- Video Settings (confVideo) ---\n", __func__);
+	pr_info("[%s] --- Video Settings (confVideo) ---\n", __func__);
 	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
-		LVI_PRINT("[%s]   -- Video Setting [%d] (%s) --\n", __func__, i,
-			  confVideo[i].name ? confVideo[i].name : "N/A");
+		pr_info("[%s]   -- Video Setting [%d] (%s) --\n", __func__, i, confVideo[i].name ? confVideo[i].name : "N/A");
 		ConfigParam_PrintParam(&confVideo[i].PaletteSelection);
 		ConfigParam_PrintParam(&confVideo[i].Type);
 		ConfigParam_PrintParam(&confVideo[i].LinesPerFrame);
-		ConfigParam_PrintParam(
-			&confVideo[i].LinesActiveInCompletePicture);
+		ConfigParam_PrintParam(&confVideo[i].LinesActiveInCompletePicture);
 		ConfigParam_PrintParam(&confVideo[i].FirstActiveLine);
 		ConfigParam_PrintParam(&confVideo[i].HorizontalTotalLength);
 		ConfigParam_PrintParam(&confVideo[i].HorizontalSyncLength);
-		ConfigParam_PrintParam(
-			&confVideo[i].HorizontalActiveVideoStart);
-		ConfigParam_PrintParam(
-			&confVideo[i].HorizontalActiveVideoLength);
+		ConfigParam_PrintParam(&confVideo[i].HorizontalActiveVideoStart);
+		ConfigParam_PrintParam(&confVideo[i].HorizontalActiveVideoLength);
 		ConfigParam_PrintParam(&confVideo[i].VerticalSyncLength);
 		ConfigParam_PrintParam(&confVideo[i].VoltageDac);
 		ConfigParam_PrintParam(&confVideo[i].SyncRgb);
@@ -1334,8 +1084,7 @@ void ConfigParam_PrintAll(void)
 	}
 
 	// confGraphics
-	LVI_PRINT("[%s] --- Graphics (%s) ---\n", __func__,
-		  confGraphics.name ? confGraphics.name : "N/A");
+	pr_info("[%s] --- Graphics (%s) ---\n", __func__, confGraphics.name ? confGraphics.name : "N/A");
 	ConfigParam_PrintParam(&confGraphics.ReferenceLineWidth);
 	ConfigParam_PrintParam(&confGraphics.ReferenceLineLowSpeed);
 	ConfigParam_PrintParam(&confGraphics.ReferenceLineHighSpeed);
@@ -1344,76 +1093,24 @@ void ConfigParam_PrintAll(void)
 	ConfigParam_PrintParam(&confGraphics.PosNegSpeed);
 
 	// confPTZ
-	LVI_PRINT("[%s] --- PTZ (%s) ---\n", __func__,
-		  confPTZ.name ? confPTZ.name : "N/A");
+	pr_info("[%s] --- PTZ (%s) ---\n", __func__, confPTZ.name ? confPTZ.name : "N/A");
 	ConfigParam_PrintParam(&confPTZ.LimitUp);
 	ConfigParam_PrintParam(&confPTZ.LimitDown);
 	ConfigParam_PrintParam(&confPTZ.LimitLeft);
 	ConfigParam_PrintParam(&confPTZ.LimitRight);
 
 	// confBattery
-	LVI_PRINT("[%s] --- Battery (%s) ---\n", __func__,
-		  confBattery.name ? confBattery.name : "N/A");
+	pr_info("[%s] --- Battery (%s) ---\n", __func__, confBattery.name ? confBattery.name : "N/A");
 	ConfigParam_PrintParam(&confBattery.Type);
 	ConfigParam_PrintParam(&confBattery.NominalCapacity);
 	ConfigParam_PrintParam(&confBattery.TempCoefficientCapacity);
 	ConfigParam_PrintParam(&confBattery.AgeCoefficientCapacity);
 	ConfigParam_PrintParam(&confBattery.LowCapacityLimit);
 
-	LVI_PRINT("[%s] --- End of Configuration Parameters (Kernel) ---\n",
-		  __func__);
+	// confLighting
+	pr_info("[%s] --- Lighting (%s) ---\n", __func__, confLighting.name ? confLighting.name : "N/A");
+	ConfigParam_PrintParam(&confLighting.Intensity);
+	// Additional parameters for lighting can be added here
+
+	pr_info("[%s] --- End of Configuration Parameters (Kernel) ---\n", __func__);
 }
-
-#else
-// User-space functions
-void ConfigParam_PrintParam(ConfigParam *param)
-{
-	const void *data;
-	const int name_width = 40;
-	uint32_t i;
-	const uint8_t *array;
-
-	if (!param) {
-		printf("\nParameter not found\n");
-		return;
-	}
-
-	data = ConfigParam_GetData(param);
-	if (!data) {
-		printf("No data available in %s\n", param->name);
-		return;
-	}
-
-	printf("\tParameter: %-*s", name_width, param->name);
-	printf("Addr: 0x%04X\tSize: %u\tType: ", param->address, param->size);
-
-	switch (param->type) {
-	case TYPE_8:
-		printf("TYPE_8\t\tValue: 0x%02X\n", *(const uint8_t *)data);
-		break;
-	case TYPE_16:
-		printf("TYPE_16\t\tValue: 0x%04X\n", *(const uint16_t *)data);
-		break;
-	case TYPE_32:
-		printf("TYPE_32\t\tValue: 0x%08X\n", *(const uint32_t *)data);
-		break;
-	case TYPE_STRING:
-		printf("TYPE_STRING\tValue: \"%s\"\n", (const char *)data);
-		break;
-	case TYPE_ARRAY:
-		printf("TYPE_ARRAY\tValue: [");
-		array = (const uint8_t *)data;
-		for (i = 0; i < param->size; ++i) {
-			printf("0x%02X", array[i]);
-			if (i < param->size - 1)
-				printf(", ");
-		}
-		printf("]\n");
-		break;
-	default:
-		printf("UNKNOWN\n");
-		break;
-	}
-}
-
-#endif

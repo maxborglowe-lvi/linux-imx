@@ -48,8 +48,7 @@ static int lvipanel_write_command(char data)
 	struct i2c_msg msgs[1];
 
 	if (!i2c_client || !i2c_client->adapter) {
-		pr_err("[%s] I2C client or adapter not initialized\n",
-		       __func__);
+		pr_err("[%s] I2C client or adapter not initialized\n", __func__);
 		return -ENODEV;
 	}
 
@@ -60,8 +59,7 @@ static int lvipanel_write_command(char data)
 
 	ret = i2c_transfer(i2c_client->adapter, msgs, 1);
 	if (ret < 0) {
-		pr_err("[%s] Failed to write to I2C device: %d\n", __func__,
-		       ret);
+		pr_err("[%s] Failed to write to I2C device: %d\n", __func__, ret);
 		return ret;
 	}
 
@@ -117,15 +115,13 @@ static int lvipanel_polling_thread(void *data)
 		ret = i2c_transfer(i2c_client->adapter, msgs, 1);
 		if (ret < 0) {
 			// Handle error (optional)
-			pr_err("[%s] Failed to read from I2C in polling thread: %d\n",
-			       __func__, ret);
+			pr_err("[%s] Failed to read from I2C in polling thread: %d\n", __func__, ret);
 		} else {
 			// pr_info("Data read from I2C device: 0x%x\n", i2c_data);
 
 			// Check for PANEL_EVENT_ONOFF_RELEASE and trigger shutdown
 			if (i2c_data == PANEL_EVENT_SYSTEM_SHUTDOWN) {
-				pr_info("[%s] PANEL_EVENT_SYSTEM_SHUTDOWN detected, initiating orderly shutdown\n",
-					__func__);
+				pr_info("[%s] PANEL_EVENT_SYSTEM_SHUTDOWN detected, initiating orderly shutdown\n", __func__);
 				orderly_poweroff(true); // Initiates shutdown
 				break;
 			}
@@ -133,11 +129,9 @@ static int lvipanel_polling_thread(void *data)
 			// Check if data is non-zero and send signal if needed
 			if (i2c_data != 0 && user_pid > 0) {
 				// pr_info("Sending signal to user space process PID: %d\n", user_pid);
-				ret = kill_pid(find_vpid(user_pid),
-					       DATA_AVAILABLE_SIGNAL, 1);
+				ret = kill_pid(find_vpid(user_pid), DATA_AVAILABLE_SIGNAL, 1);
 				if (ret < 0) {
-					pr_err("[%s] Failed to send signal to user space: %d\n",
-					       __func__, ret);
+					pr_err("[%s] Failed to send signal to user space: %d\n", __func__, ret);
 				}
 			}
 		}
@@ -151,17 +145,14 @@ static int lvipanel_polling_thread(void *data)
 }
 
 // Function to be called during shutdown
-static int lvipanel_reboot_notifier(struct notifier_block *nb,
-				    unsigned long action, void *data)
+static int lvipanel_reboot_notifier(struct notifier_block *nb, unsigned long action, void *data)
 {
 	switch (action) {
 	case SYS_DOWN:
 	case SYS_HALT:
 	case SYS_POWER_OFF:
-		pr_info("[%s] System is shutting down. Sending SYSTEM_EVENT_LIGHT_OFF\n",
-			__func__);
-		lvipanel_write_command(
-			SYSTEM_EVENT_LIGHT_OFF); // Send the light off command
+		pr_info("[%s] System is shutting down. Sending SYSTEM_EVENT_LIGHT_OFF\n", __func__);
+		lvipanel_write_command(SYSTEM_EVENT_LIGHT_OFF); // Send the light off command
 		break;
 	default:
 		break;
@@ -174,8 +165,7 @@ static struct notifier_block lvipanel_reboot_nb = {
 	.notifier_call = lvipanel_reboot_notifier,
 };
 
-static long lvipanel_ioctl(struct file *file, unsigned int cmd,
-			   unsigned long arg)
+static long lvipanel_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	char data;
 	int ret;
@@ -200,10 +190,8 @@ static long lvipanel_ioctl(struct file *file, unsigned int cmd,
 
 		// pr_info("[%s] Data read from I2C device: 0x%x\n", __func__, data);
 
-		if (copy_to_user((char __user *)arg, &i2c_data,
-				 sizeof(i2c_data))) {
-			pr_err("[%s] Failed to copy data to user space\n",
-			       __func__);
+		if (copy_to_user((char __user *)arg, &i2c_data, sizeof(i2c_data))) {
+			pr_err("[%s] Failed to copy data to user space\n", __func__);
 			return -EFAULT;
 		}
 
@@ -221,13 +209,11 @@ static long lvipanel_ioctl(struct file *file, unsigned int cmd,
 		pr_info("[%s] IOCTL_WRITE_DATA command\n", __func__);
 
 		if (copy_from_user(&data, (char __user *)arg, sizeof(data))) {
-			pr_err("[%s] Failed to copy data from user space\n",
-			       __func__);
+			pr_err("[%s] Failed to copy data from user space\n", __func__);
 			return -EFAULT;
 		}
 
-		pr_info("[%s] Data to be written to I2C device: 0x%x\n",
-			__func__, data);
+		pr_info("[%s] Data to be written to I2C device: 0x%x\n", __func__, data);
 
 		msgs[0].addr = i2c_client->addr;
 		msgs[0].flags = 0;
@@ -236,8 +222,7 @@ static long lvipanel_ioctl(struct file *file, unsigned int cmd,
 
 		ret = i2c_transfer(i2c_client->adapter, msgs, 1);
 		if (ret < 0) {
-			pr_err("[%s] Failed to write to I2C device: %d\n",
-			       __func__, ret);
+			pr_err("[%s] Failed to write to I2C device: %d\n", __func__, ret);
 			return ret;
 		}
 		return 0;
@@ -273,8 +258,7 @@ static struct file_operations fops = {
 	.unlocked_ioctl = lvipanel_ioctl,
 };
 
-static int lvipanel_probe(struct i2c_client *client,
-			  const struct i2c_device_id *id)
+static int lvipanel_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	struct device_node *np = client->dev.of_node;
 
@@ -297,13 +281,11 @@ static int lvipanel_probe(struct i2c_client *client,
 	/* Register the character device */
 	major = register_chrdev(0, DEVICE_NAME, &fops);
 	if (major < 0) {
-		pr_err("[%s] Failed to register character device: %d\n",
-		       __func__, major);
+		pr_err("[%s] Failed to register character device: %d\n", __func__, major);
 		return major;
 	}
 
-	pr_info("[%s] lvipanel device registered with major number %d\n",
-		__func__, major);
+	pr_info("[%s] lvipanel device registered with major number %d\n", __func__, major);
 
 	/* Create the device class */
 	lvipanel_class = class_create(THIS_MODULE, DEVICE_NAME);
@@ -315,8 +297,7 @@ static int lvipanel_probe(struct i2c_client *client,
 	}
 
 	/* Create the device node */
-	if (device_create(lvipanel_class, NULL, MKDEV(major, 0), NULL,
-			  DEVICE_NAME) == NULL) {
+	if (device_create(lvipanel_class, NULL, MKDEV(major, 0), NULL, DEVICE_NAME) == NULL) {
 		class_destroy(lvipanel_class);
 		unregister_chrdev(major, DEVICE_NAME);
 		pr_err("[%s] Failed to create device node\n", __func__);
@@ -327,8 +308,7 @@ static int lvipanel_probe(struct i2c_client *client,
 
 	// Start the polling thread
 	keep_polling = true;
-	polling_thread =
-		kthread_run(lvipanel_polling_thread, NULL, "lvipanel_polling");
+	polling_thread = kthread_run(lvipanel_polling_thread, NULL, "lvipanel_polling");
 	if (IS_ERR(polling_thread)) {
 		pr_err("[%s] Failed to create polling thread\n", __func__);
 		device_destroy(lvipanel_class, MKDEV(major, 0));
@@ -337,8 +317,7 @@ static int lvipanel_probe(struct i2c_client *client,
 		return PTR_ERR(polling_thread);
 	}
 
-	pr_info("[%s] I2C client successfully initialized: addr=0x%x\n",
-		__func__, client->addr);
+	pr_info("[%s] I2C client successfully initialized: addr=0x%x\n", __func__, client->addr);
 	return 0;
 }
 
@@ -376,10 +355,8 @@ static struct i2c_driver lvipanel_driver = {
     .id_table = lvipanel_id,
 };
 
-module_i2c_driver(
-	lvipanel_driver); // Registers and unregisters the driver automatically
+module_i2c_driver(lvipanel_driver); // Registers and unregisters the driver automatically
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Max Borglowe");
-MODULE_DESCRIPTION(
-	"I2C Kernel Module using i2c_msg named lvipanel with DT support");
+MODULE_DESCRIPTION("I2C Kernel Module using i2c_msg named lvipanel with DT support");
