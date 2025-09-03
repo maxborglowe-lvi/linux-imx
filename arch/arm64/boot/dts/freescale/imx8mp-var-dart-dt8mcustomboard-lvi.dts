@@ -503,11 +503,12 @@
 	tps55287: tps55287@75 {
 		compatible = "ti,tps55287";
 		reg = <0x75>;                 /* or 0x74 per MODE pin (datasheet Table 6-2) */
+		status = "okay";
 
 		/* Use internal feedback path; program VOUT via I2C */
 		ti,internal-feedback;         /* default true if omitted */
 		ti,intfb-ratio = <3>;         /* 0:0.2256, 1:0.1128, 2:0.0752, 3:0.0564 (=> 10 mV steps) */
-		ti,vout-microvolt = <12000000>;/* 9.0 V */
+		ti,vout-microvolt = <13000000>;/* 9.0 V */
 
 		/* Output current limit using sense resistor on ISP/ISN */
 		ti,ilim-milliamp = <2500>;    /* 2.5 A */
@@ -525,7 +526,7 @@
 		ti,ocp-delay-ms = <6>;        /* ~6 ms */
 
 		/* Cable droop compensation */
-		// ti,cdc-external;           /* use external resistor on CDC pin */
+		ti,cdc-external;           /* use external resistor on CDC pin */
 		ti,cdc-rise-100mv-steps = <3>;/* 0..7 -> 0..0.7V @ 50mV sense; 3=>0.3V */
 	};
 };

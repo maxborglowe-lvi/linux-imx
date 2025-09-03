@@ -232,10 +232,10 @@ static void ncs8801s_parse_dt(struct ncs8801s *ncs8801s)
 
 static int ncs8801s_i2c_probe(struct i2c_client *i2c, const struct i2c_device_id *id)
 {
-	if (!atomic_read(&tps55287_ready)) {
-		pr_info("tps55287 not ready yet, deferring ncs8801 probe\n");
-		return -EPROBE_DEFER;
-	}
+	// if (!atomic_read(&tps55287_ready)) {
+	// 	pr_info("tps55287 not ready yet, deferring ncs8801 probe\n");
+	// 	return -EPROBE_DEFER;
+	// }
 
 	int ret;
 	pr_info("[%s] called\n", __func__);
