@@ -239,7 +239,40 @@ ENV{ID_VENDOR_ID}=="<2575>",ENV{ID_MODEL_ID}=="<C300>",DEVPATH=="/devices/platfo
 
 /devices/platform/soc@0/32f10100.usb/38100000.dwc3/xhci-hcd.0.auto/usb1/1-1/1-1.1/1-1.1.1/
 
-### Install built kernel images, modules, and device trees on an SD card
+## Install built kernel images, modules, and device trees on an SD card
+
+### Create bootable SD card (Variscite docs)
+https://dev.variscite.com/dart-mx8m-plus/mx8mp-yocto-hardknott-5.10.72_2.2.1-v1.1/yocto-build-release/
+
+#### First, wipe the SD card (replace X with sd card suffix):
+sudo wipefs -a /dev/sdX
+
+#### Create partition:
+sudo parted /dev/sdX --script mklabel gpt
+
+#### Create a rootfs partition starting at 8 MiB
+sudo parted /dev/sdX --script mkpart primary ext4 8MiB 100%
+
+#### Format the rootfs partition
+sudo mkfs.ext4 -L rootfs /dev/sdd1
+
+#### SPL (first piece of U-Boot)
+cd ~/var-fsl-yocto/build_xwayland
+sudo dd if=tmp/deploy/images/imx8mp-var-dart/u-boot-spl.bin-imx8mp-var-dart-sd of=/dev/sdX bs=1k seek=1 conv=fsync
+
+#### Full U-Boot image
+sudo dd if=tmp/deploy/images/imx8mp-var-dart/u-boot-sd-1.0-r0.bin of=/dev/sdX bs=1k seek=69 conv=fsync
+
+#### Use the Variscite SD card script
+cd ~/var-fsl-yocto
+sudo MACHINE=imx8mp-var-dart sources/meta-variscite-sdk/scripts/var_mk_yocto_sdcard/var-create-yocto-sdcard.sh -a /dev/sdX
+
+#### Verify SD card partitions
+sudo parted /dev/sdX print
+
+----------------------------------------------
+
+### Copy Image to bootable SD card 
 
 https://variwiki.com/index.php?title=Yocto_Build_Linux&release=mx8mp-yocto-hardknott-5.10.72_2.2.1-v1.1#Install_the_built_kernel_images,_modules,_and_device_trees_on_an_SD_card
 
@@ -255,14 +288,12 @@ Install the kernel image and modules:
     sudo cp arch/arm64/boot/Image.gz /media/root/boot/Image.gz-${kver}
     sudo ln -fs /boot/Image.gz-${kver} /media/root/boot/Image.gz
     sudo cp -r ~/var-fsl-yocto/rootfs/* /media/root
-    sudo rsync -Kra $WORKDIR/rootfs/* /media/root
+    sudo rsync -Kra $WORKDIR/../rootfs/* /media/root
 
-    sudo cp arch/arm64/boot/dts/freescale/imx8mp-var-dart-dt8mcustomboard-lvi.dtb /media/root/boot/
+    sudo cp ~/var-fsl-yocto/local_repos/linux-imx/arch/arm64/boot/dts/freescale/imx8mp-var-dart-dt8mcustomboard-lvi.dtb /media/root/boot/
 
 Install the device trees:
-    sudo cp arch/arm64/boot/dts/freescale/*imx*var*.dtb /media/root/boot/
-
-
+    sudo cp ~/var-fsl-yocto/local_repos/linux-imx/arch/arm64/boot/dts/freescale/*imx*var*.dtb /media/root/boot/
 
 
 

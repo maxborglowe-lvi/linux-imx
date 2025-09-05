@@ -288,6 +288,11 @@ static int lviconfig_probe(struct i2c_client *client, const struct i2c_device_id
 		return ret;
 	}
 
+	gpiod_set_value_cansleep(write_control_gpio, 1); // Enable write access if GPIO is defined
+	usleep_range(500, 1000);
+	gpiod_set_value_cansleep(write_control_gpio, 0); // Enable write access if GPIO is defined
+	usleep_range(500, 1000);
+
 	major = register_chrdev(0, DEVICE_NAME, &fops);
 	if (major < 0) {
 		pr_err("[%s]: Failed to register character device\n", __func__);
