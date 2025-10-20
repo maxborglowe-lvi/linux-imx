@@ -708,6 +708,10 @@ static long lcdifv3_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 			break;
 		}
 
+		pr_info("[%s] Display parameters: Brightness = %d, Contrast = %d, Saturation = %d, RGain = %d, GGain = %d, BGain = %d\n", __func__, *(confMonitorMode[0].Brightness.data),
+			*(confMonitorMode[0].Contrast.data), *(confMonitorMode[0].Saturation.data), *(confMonitorMode[0].ColorGainR.data),
+			*(confMonitorMode[0].ColorGainG.data), *(confMonitorMode[0].ColorGainB.data));
+
 		csc_params.brightness = *(confMonitorMode[0].Brightness.data);
 		csc_params.contrast = *(confMonitorMode[0].Contrast.data);
 		csc_params.saturation = *(confMonitorMode[0].Saturation.data);

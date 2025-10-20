@@ -902,7 +902,8 @@ config TPS55287_PMIC
 	tristate "TPS55287 PMIC support"
 	depends on I2C
 	depends on OF
-
+	depends on REGULATOR
+    select REGMAP_I2C
 	help
 	  Say Y here to have support for TPS55287 PMIC family .
 	  This driver can also be built as a module. If so, the module will be

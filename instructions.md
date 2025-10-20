@@ -5,7 +5,7 @@
 
 ## Initial setup
 
-1. Setup Yocto Project
+### 1. Setup Yocto Project
     * https://variwiki.com/index.php?title=Yocto_Build_Release&release=mx8mp-yocto-hardknott-5.10.72_2.2.1-v1.1
 
           $ cd ~/var-fsl-yocto
@@ -27,7 +27,7 @@
 
 	          ~/var-fsl-yocto/sources/meta-freescale/recipes-bsp/firmware-imx/firmware-sof-imx_1.9.0-1.bb
 
-2. Install Yocto Toolchain
+### 2. Install Yocto Toolchain
     * https://variwiki.com/index.php?title=Yocto_Toolchain_installation&release=mx8mp-yocto-hardknott-5.10.72_2.2.1-v1.1
 
           $ cd ~/var-fsl-yocto
@@ -39,10 +39,10 @@
 
           $ ~/var-fsl-yocto/build_xwayland/tmp/deploy/sdk/fslc-xwayland-glibc-x86_64-fsl-image-gui-cortexa53-crypto-imx8mp-var-dart-toolchain-3.3.sh
 
-3. Setup TFTP/NFS and rootfs
+### 3. Setup TFTP/NFS and rootfs
     * https://variwiki.com/index.php?title=Yocto_Setup_TFTP/NFS&release=mx8mp-yocto-hardknott-5.10.72_2.2.1-v1.1
 
-4. Prepare the Linux kernel
+### 4. Prepare the Linux kernel
 
        $ cd ~/var-fsl-yocto
        $ source setup-environment build_xwayland
@@ -54,7 +54,7 @@
        $ git reset --hard
        $ git clean -fdx
 
-5. Apply Daniel Mobergs patches
+### 5. Apply Daniel Mobergs patches
 
         $ cd ~/var-fsl-yocto/local_repos/linux-imx 
 
@@ -85,7 +85,7 @@ use the generated defconfig and .config below :)
 
 my_defconfig.config should contain CONFIG_VIDEO_LVICAM=y only.
 
-6. Build kernel with patches and LVICAM (LVICAM enabled in defconfig)
+### 6. Build kernel with patches and LVICAM (LVICAM enabled in defconfig)
 
        source /opt/fslc-xwayland/3.3/environment-setup-cortexa53-crypto-fslc-linux
        export LDFLAGS=
@@ -107,13 +107,15 @@ my_defconfig.config should contain CONFIG_VIDEO_LVICAM=y only.
 
        $ ./install.sh
 
-7. Use Picocom
+### 7. Use Picocom
 
        sudo apt-get install picocom
        sudo picocom -b 115200 /dev/ttyUSB0
 
 
-8. u-boot (press any key when booting the dev kit to enter u-boot)
+### 8. U-boot
+
+Press any key when booting the dev kit to enter u-boot.
 
 https://variwiki.com/index.php?title=U-Boot_4.1.15_features
 
@@ -168,12 +170,6 @@ Place install.sh script inside ~/var-fsl-yocto/local_repos/linux-imx
     G:\Utveckling (HB)\Johannes\ZIP NXTG\my_defconfig.config
 
 Place my_defconfig.config inside ~/var-fsl-yocto/local_repos/linux-imx/arch/arch64/configs
-
-
-
-
-
-
 
 #### display on multiple monitors
 
@@ -239,7 +235,37 @@ ENV{ID_VENDOR_ID}=="<2575>",ENV{ID_MODEL_ID}=="<C300>",DEVPATH=="/devices/platfo
 
 /devices/platform/soc@0/32f10100.usb/38100000.dwc3/xhci-hcd.0.auto/usb1/1-1/1-1.1/1-1.1.1/
 
-### Install built kernel images, modules, and device trees on an SD card
+## Create Bootable Recovery SD Card (ALL YOU NEED TO BEGIN YOUR JOURNEY)
+
+### Yocto Revovery SD Card
+
+https://dev.variscite.com/dart-mx8m-plus/mx8mp-yocto-hardknott-5.10.72_2.2.1-v1.1/yocto-recovery-sd-card/
+
+Download image from Variscite: https://variscite-public.nyc3.cdn.digitaloceanspaces.com/DART-MX8M-PLUS/Software/mx8mp__yocto-hardknott-5.10.72_2.2.1-v1.1__android-11.0.0_2.6.0-v1.2.img.gz
+
+Connect SD card and mount on Linux host PC, then copy the image:
+    $ sudo umount /dev/sdX?*
+    $ zcat <image name>.img.gz | sudo dd of=/dev/sdX bs=1M && sync
+
+--->$ zcat mx8mp__yocto-hardknott-5.10.72_2.2.1-v1.1__android-11.0.0_2.6.0-v1.2.img.gz | sudo dd of=/dev/sdX bs=1M && sync    
+
+Next, plug in the SD card on the ZIP-NXTG carrierboard and put the BOOT MODE switch in "SD".
+Boot the device, and login. Run "install_yocto.sh" from /usr/bin
+
+    $ ./usr/bin/install_yocto.sh
+
+Now set the BOOT MODE switch in "MMC" mode, and press the "RST SOM" button. The system will now boot into the installed Yocto system.
+However, to apply your kernel files and DTS, you must follow the [U-Boot section](#8-u-boot).
+
+### Android Recovery SD Card
+
+
+
+
+# NOT SURE WHAT TO USE THIS FOR
+----------------------------------------------
+
+### Copy Image to bootable SD card 
 
 https://variwiki.com/index.php?title=Yocto_Build_Linux&release=mx8mp-yocto-hardknott-5.10.72_2.2.1-v1.1#Install_the_built_kernel_images,_modules,_and_device_trees_on_an_SD_card
 

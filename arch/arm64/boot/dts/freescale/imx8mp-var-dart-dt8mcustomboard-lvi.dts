@@ -2,7 +2,7 @@
 /*
  * Copyright 2019 NXP
  * Copyright 2020-2021 Variscite Ltd.
- */GitHub Pull Requests and Issues
+ */
 
 #include "imx8mp-var-dart.dtsi"
 
@@ -256,25 +256,6 @@
 		// size = <32768> //size of EEPROM
     };
 
-	/*
-     * M24C08 at 0x54–0x57, 4 × 256 byte blocks = 1024 bytes total
-     *
-     * - compatible: tells Linux to use the at24 driver
-     * - reg: first I2C address
-     * - num-addresses: number of consecutive I2C addresses used by this device
-     * - pagesize: EEPROM internal write‐page size (in bytes)
-     * - size: total byte-size of the EEPROM
-     */
-    // eeprom@54 {
-    //     compatible     = "atmel,24c08", "atmel,24cXX";
-    //     reg            = <0x54>;
-    //     num-addresses  = <4>;
-    //     pagesize       = <16>;
-    //     size           = <1024>;
-    //     #address-cells = <1>;
-    //     #size-cells    = <0>;
-    // };
-
 	lvipanel@69 {
 		reg = <0x69>;
 
@@ -381,12 +362,6 @@
  			#address-cells = <1>;
  			#size-cells = <0>;
 
-			//  /* Input, int this case from camera */
-			//  port@0 {
-			// 	reg = <0>;
-			// 	/* Can we skip this in first attempts?*/
-			//  };
-
 			 /* Output, in this case the IMX CSI port*/
 			 port@0 {
 				reg = <0>;
@@ -455,7 +430,6 @@
     };
 
 	lvibattery@b {
-
         compatible = "lvi,lvibattery";
 		reg = <0xb>;    
 
@@ -508,7 +482,7 @@
 		/* Use internal feedback path; program VOUT via I2C */
 		ti,internal-feedback;         /* default true if omitted */
 		ti,intfb-ratio = <3>;         /* 0:0.2256, 1:0.1128, 2:0.0752, 3:0.0564 (=> 10 mV steps) */
-		ti,vout-microvolt = <13000000>;/* 9.0 V */
+		ti,vout-microvolt = <13000000>;/* 13.0 V */
 
 		/* Output current limit using sense resistor on ISP/ISN */
 		ti,ilim-milliamp = <2500>;    /* 2.5 A */
@@ -528,6 +502,16 @@
 		/* Cable droop compensation */
 		ti,cdc-external;           /* use external resistor on CDC pin */
 		ti,cdc-rise-100mv-steps = <3>;/* 0..7 -> 0..0.7V @ 50mV sense; 3=>0.3V */
+
+		tps55287_vcc: regulator@0 {
+			compatible = "ti,tps55287-reg";
+			regulator-name = "tps55287_vcc";
+			regulator-min-microvolt = <3300000>;
+			regulator-max-microvolt = <13500000>;
+
+			// regulator-boot-on; 
+			// regulator-always-on;
+		};
 	};
 };
 
@@ -638,23 +622,6 @@
 &mipi_dsi {
 	status = "disabled";
 };
-
-// &pcie {
-// 	reset-gpio = <&pca6408_2 3 GPIO_ACTIVE_LOW>;
-// 	ext_osc = <1>;
-// 	clocks = <&clk IMX8MP_CLK_HSIO_ROOT>,
-// 		 <&clk IMX8MP_CLK_PCIE_AUX>,
-// 		 <&clk IMX8MP_CLK_HSIO_AXI>,
-// 		 <&clk IMX8MP_CLK_PCIE_ROOT>;
-// 	clock-names = "pcie", "pcie_aux", "pcie_phy", "pcie_bus";
-// 	assigned-clocks = <&clk IMX8MP_CLK_HSIO_AXI>,
-// 			  <&clk IMX8MP_CLK_PCIE_AUX>;
-// 	assigned-clock-rates = <500000000>, <10000000>;
-// 	assigned-clock-parents = <&clk IMX8MP_SYS_PLL2_500M>,	
-// 				 <&clk IMX8MP_SYS_PLL2_50M>;
-// 	l1ss-disabled;
-// 	status = "okay";
-// };
 
 &pcie_ep {
 	ext_osc = <1>;
@@ -807,23 +774,6 @@
 	};
 };
 
-// &mipi_csi_1 {
-// 	#address-cells = <1>;
-// 	#size-cells = <0>;
-// 	status = "okay";
-
-// 	port@1 {
-// 		reg = <1>;
-// 		mipi_csi1_ep: endpoint {
-// 			remote-endpoint = <&ov5640_mipi_1_ep>;
-// 			data-lanes = <2>;
-// 			csis-hs-settle = <13>;
-// 			csis-clk-settle = <2>;
-// 			csis-wclk;
-// 		};
-// 	};
-// };
-
 &cameradev {
 	status = "okay";
 };
@@ -847,63 +797,6 @@
 		status = "okay";
 	};
 };
-
-// &ecspi1 {
-// 	pinctrl-names = "default";
-// 	pinctrl-0 = <&pinctrl_ecspi1>;
-// 	cs-gpios = <&gpio5  9 GPIO_ACTIVE_LOW>,
-// 		   <&gpio1 12 GPIO_ACTIVE_LOW>,
-// 		   <&gpio2 10 GPIO_ACTIVE_LOW>;
-// 	status = "okay";
-// 	label="ecspi1";
-
-// 	/* Resistive touch controller */
-// 	/*
-// 	ads7846@0 {
-// 		compatible = "ti,ads7846";
-// 		reg = <0>;
-// 		pinctrl-names = "default";
-// 		pinctrl-0 = <&pinctrl_restouch>;
-// 		interrupt-parent = <&gpio1>;
-// 		interrupts = <7 IRQ_TYPE_EDGE_FALLING>;
-// 		spi-max-frequency = <1500000>;
-// 		pendown-gpio = <&gpio1 7 GPIO_ACTIVE_LOW>;
-// 		ti,x-min = /bits/ 16 <125>;
-// 		ti,x-max = /bits/ 16 <4008>;
-// 		ti,y-min = /bits/ 16 <282>;
-// 		ti,y-max = /bits/ 16 <3864>;
-// 		ti,x-plate-ohms = /bits/ 16 <180>;
-// 		ti,pressure-max = /bits/ 16 <255>;
-// 		ti,debounce-max = /bits/ 16 <10>;
-// 		ti,debounce-tol = /bits/ 16 <3>;
-// 		ti,debounce-rep = /bits/ 16 <1>;
-// 		ti,settle-delay-usec = /bits/ 16 <150>;
-// 		ti,keep-vref-on;
-// 		wakeup-source;
-// 		status = "okay";
-// 	};
-// 	*/
-
-// 	can0: can@1 {
-// 		compatible = "microchip,mcp251xfd";
-// 		reg = <1>;
-// 		pinctrl-names = "default";
-// 		pinctrl-0 = <&pinctrl_can>;
-// 		interrupt-parent = <&gpio1>;
-// 		interrupts = <6 IRQ_TYPE_LEVEL_LOW>;
-// 		microchip,rx-int-gpios = <&gpio5 4 GPIO_ACTIVE_LOW>;
-// 		clocks = <&can0_osc>;
-// 		spi-max-frequency = <20000000>;
-// 		status = "okay";
-// 	};
-
-// 	spidev@2 {
-// 		compatible = "var,spidev";
-// 		reg = <2>;
-// 		spi-max-frequency = <12000000>;
-// 		status = "okay";
-// 	};
-// };
 
 &ldo4 {
 	regulator-min-microvolt = <1800000>;
@@ -1142,12 +1035,6 @@
 			MX8MP_IOMUXC_SPDIF_RX__GPIO5_IO04				0x16
 		>;
 	};
-
-	// pinctrl_pca6408: pca6408grp {
-	// 	fsl,pins = <
-	// 		MX8MP_IOMUXC_GPIO1_IO05__GPIO1_IO05				0x1c6
-	// 	>;
-	// };
 
 	pinctrl_gpio_leds: ledgrp {
 		fsl,pins = <

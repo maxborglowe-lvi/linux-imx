@@ -41,6 +41,10 @@
 #include <linux/signal.h>
 #include <linux/gpio/consumer.h>
 
+#include <linux/regulator/consumer.h>
+
+MODULE_SOFTDEP("pre: tps55287_pmic");
+
 static int debug;
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "debug level (0-3)");
@@ -72,7 +76,8 @@ struct lvicam {
 
 	struct gpio_desc *reset_gpio;
 	struct gpio_desc *seesaw_gpio;
-	struct gpio_desc *power_enable_gpio;
+	struct gpio_desc *power_gpio;
+	struct gpio_desc *onoff_gpio;
 };
 
 static const struct v4l2_mbus_framefmt tc358746_def_fmt = {
@@ -171,6 +176,8 @@ typedef struct {
 } lvicam_controller;
 
 lvicam_controller lvicam_ctrl;
+
+static struct lvicam *lvicam = NULL;
 
 /* Helpers */
 static const struct tc358746_mbus_fmt *tc358746_get_format(u32 code)
@@ -603,14 +610,39 @@ static void lvicam_gpio_reset(struct lvicam *lvicam)
 	msleep(20);
 }
 
+static void lvicam_gpio_on_set(struct lvicam *lvicam)
+{
+	pr_info("[%s] call\n", __func__);
+	gpiod_set_value_cansleep(lvicam->onoff_gpio, 1);
+	usleep_range(5000, 10000);
+}
+
+static void lvicam_gpio_off_set(struct lvicam *lvicam)
+{
+	pr_info("[%s] call\n", __func__);
+	gpiod_set_value_cansleep(lvicam->onoff_gpio, 0);
+	usleep_range(5000, 10000);
+}
+
 static int lvicam_s_power(struct v4l2_subdev *sd, int on)
 {
 	pr_info("[%s] %d\n", __func__, on);
 
 	struct lvicam *lvicam = to_lvicam(sd);
 
-	// if (lvicam->reset_gpio)
+	pr_info("[%s] Asserting power pin.\n", __func__);
+	gpiod_set_value(lvicam->power_gpio, 1);
+
+	pr_info("[%s] Resetting Toshiba converter chip.\n", __func__);
 	lvicam_gpio_reset(lvicam);
+
+	// pr_info("[%s] Setting the onoff gpio LOW.\n", __func__);
+	// lvicam_gpio_off_set(lvicam);
+
+	// usleep_range(10000, 20000);
+
+	// pr_info("[%s] Setting the onoff gpio HIGH.\n", __func__);
+	// lvicam_gpio_on_set(lvicam);
 
 	return 0;
 }
@@ -821,9 +853,11 @@ static struct file_operations fops = {
 #define I2C_BUS_NUM 2 // /dev/i2c-2
 #define I2C_DEV_ADDR 0x10
 
-static int lvicam_ctrl_device_init(void)
+static int lvicam_ctrl_device_init(struct i2c_client *client)
 {
 	int ret;
+
+	// lvicam structure is already allocated and GPIOs are available
 
 	// Allocate character device region
 	ret = alloc_chrdev_region(&lvicam_ctrl.dev_num, 0, 1, DEVICE_NAME);
@@ -855,6 +889,19 @@ static int lvicam_ctrl_device_init(void)
 		goto put_adapter;
 	}
 
+	// NOW the GPIOs are available! Control onoff GPIO
+	if (lvicam->onoff_gpio) {
+		pr_info("[%s] Setting the onoff gpio LOW.\n", __func__);
+		lvicam_gpio_off_set(lvicam);
+	}
+
+	usleep_range(10000, 20000); // Wait 1-5 seconds
+
+	if (lvicam->onoff_gpio) {
+		pr_info("[%s] Setting the onoff gpio HIGH.\n", __func__);
+		lvicam_gpio_on_set(lvicam);
+	}
+
 	pr_info("[%s] Device initialized with I2C address 0x%02x\n", __func__, lvicam_ctrl.client->addr << 1);
 	return 0;
 
@@ -884,32 +931,85 @@ static irqreturn_t lvicam_seesaw_irq_handler(int irq, void *dev_id)
 static int lvicam_probe(struct i2c_client *client)
 {
 	int err = 0;
-	int seesaw_irq;
+	struct regulator *vcc = NULL;
+	int seesaw_irq = 0;
+	int ret = 0;
 
 	pr_info("[%s] call\n", __func__);
 
-	struct lvicam *lvicam;
-	lvicam = devm_kzalloc(&client->dev, sizeof(*lvicam), GFP_KERNEL);
+	/* --- Get regulator 'vcc' --- */
+	vcc = devm_regulator_get(&client->dev, "vcc");
+	if (IS_ERR(vcc)) {
+		ret = PTR_ERR(vcc);
+		if (ret == -EPROBE_DEFER) {
+			pr_info("[%s] vcc regulator not ready, deferring probe\n", __func__);
+			return -EPROBE_DEFER;
+		}
+		pr_info("[%s] Failed to get vcc regulator: %d\n", __func__, ret);
+		return ret;
+	}
 
+	ret = regulator_enable(vcc);
+	if (ret) {
+		pr_info("[%s] regulator_enable(vcc) failed: %d\n", __func__, ret);
+		return ret;
+	}
+	pr_info("[%s] regulator 'vcc' enabled\n", __func__);
+
+	usleep_range(1000, 2000);
+
+	// Allocate lvicam structure FIRST (before GPIO acquisition)
+	lvicam = devm_kzalloc(&client->dev, sizeof(*lvicam), GFP_KERNEL);
 	if (!lvicam) {
-		pr_err("[%s] : ERROR 1\n", __func__);
+		pr_err("[%s] Failed to allocate lvicam structure\n", __func__);
 		return -ENOMEM;
 	}
 
-	lvicam_ctrl.lvicam_ptr = lvicam;
-
+	// Initialize mutex early
 	mutex_init(&lvicam->mutex);
 
+	// Initialize v4l2 subdev early so we can use v4l2_err if needed
 	v4l2_i2c_subdev_init(&lvicam->sd, client, &lvicam_subdev_ops);
 
+	// Get power enable GPIO
+	lvicam->power_gpio = devm_gpiod_get(&client->dev, "power", GPIOD_OUT_HIGH);
+	if (IS_ERR(lvicam->power_gpio)) {
+		err = PTR_ERR(lvicam->power_gpio);
+		if (err == -EPROBE_DEFER) {
+			pr_info("[%s] Power GPIO dependency not ready, deferring probe.\n", __func__);
+		} else {
+			pr_err("[%s] Failed to get power gpio: %d\n", __func__, err);
+		}
+		goto destroy_mutex;
+	}
+	pr_info("[%s] power GPIO found. Initialized HIGH.\n", __func__);
+	gpiod_set_value(lvicam->power_gpio, 1);
+
+	// Get ONOFF GPIO
+	v4l2_err(&lvicam->sd, "Fetching onoff gpio\n");
+	lvicam->onoff_gpio = devm_gpiod_get(&client->dev, "onoff", GPIOD_OUT_HIGH);
+
+	if (IS_ERR(lvicam->onoff_gpio)) {
+		pr_err("[%s] : ERROR - Failed to get onoff gpio\n", __func__);
+		v4l2_err(&lvicam->sd, "Failed to get onoff gpio\n");
+		err = PTR_ERR(lvicam->onoff_gpio);
+		goto destroy_mutex;
+	} else if (lvicam->onoff_gpio) {
+		pr_info("[%s] onoff GPIO found\n", __func__);
+		gpiod_set_value_cansleep(lvicam->onoff_gpio, 1); // Set onoff GPIO high
+	} else {
+		pr_info("[%s] onoff GPIO not found, assuming always enabled\n", __func__);
+	}
+
+	// Get reset GPIO
 	v4l2_err(&lvicam->sd, "Fetching reset gpio\n");
 	lvicam->reset_gpio = devm_gpiod_get(&client->dev, "reset", GPIOD_OUT_LOW);
 
 	if (IS_ERR(lvicam->reset_gpio)) {
-		pr_err("[%s] : ERROR 2\n", __func__);
+		pr_err("[%s] : ERROR - Failed to get reset gpio\n", __func__);
 		v4l2_err(&lvicam->sd, "Failed to get reset gpio\n");
 		err = PTR_ERR(lvicam->reset_gpio);
-		goto error_media_entity;
+		goto destroy_mutex;
 	} else if (lvicam->reset_gpio) {
 		pr_info("[%s] reset GPIO found\n", __func__);
 		gpiod_set_value_cansleep(lvicam->reset_gpio, 1); // Set reset GPIO high
@@ -917,18 +1017,14 @@ static int lvicam_probe(struct i2c_client *client)
 		pr_info("[%s] reset GPIO not found, assuming always enabled\n", __func__);
 	}
 
-	if (lvicam->reset_gpio) {
-		pr_info("[%s] resetting TC358746.\n", __func__);
-
-		lvicam_gpio_reset(lvicam);
-	}
-
+	// Get seesaw GPIO
 	lvicam->seesaw_gpio = devm_gpiod_get(&client->dev, "seesaw", GPIOD_IN);
 
 	if (IS_ERR(lvicam->seesaw_gpio)) {
 		pr_err("[%s] : ERROR 2B\n", __func__);
 		pr_info("[%s] Failed to get seesaw gpio\n", __func__);
 		err = PTR_ERR(lvicam->seesaw_gpio);
+		// Don't fail probe if seesaw GPIO is missing - just continue without it
 	} else if (lvicam->seesaw_gpio) {
 		// Request IRQ for seesaw GPIO
 		seesaw_irq = gpiod_to_irq(lvicam->seesaw_gpio);
@@ -945,40 +1041,34 @@ static int lvicam_probe(struct i2c_client *client)
 		pr_info("[%s] seesaw GPIO interrupt registered on IRQ %d\n", __func__, seesaw_irq);
 	}
 
-	// Get power enable GPIO
-	// This is the key part to fix the issue.
-	// Use `GPIOD_OUT_HIGH` to match `GPIO_ACTIVE_HIGH` in DTS.
-	lvicam->power_enable_gpio = devm_gpiod_get(&client->dev, "power-enable", GPIOD_OUT_HIGH);
-	if (IS_ERR(lvicam->power_enable_gpio)) {
-		err = PTR_ERR(lvicam->power_enable_gpio);
-		if (err == -EPROBE_DEFER) {
-			pr_info("[%s] Power-enable GPIO dependency not ready, deferring probe.\n", __func__);
-		} else {
-			pr_err("[%s] Failed to get power-enable gpio: %d\n", __func__, err);
-		}
-		return err; // Return the error so the kernel can handle it
+	// NOW initialize the character device and I2C client
+	// At this point, all GPIOs are available so lvicam_ctrl_device_init can use them
+	ret = lvicam_ctrl_device_init(client);
+	if (ret) {
+		pr_err("[%s] Failed to initialize lvicam_ctrl: %d\n", __func__, ret);
+		err = ret;
+		goto error_media_entity;
 	}
-	pr_info("[%s] power-enable GPIO found. Initialized HIGH.\n", __func__);
 
-	// gpiod_direction_output(lvicam->reset_gpio, 0);
+	// Set lvicam pointer in controller
+	lvicam_ctrl.lvicam_ptr = lvicam;
+
+	// Reset the Toshiba converter chip
+	if (lvicam->reset_gpio) {
+		pr_info("[%s] resetting TC358746.\n", __func__);
+		lvicam_gpio_reset(lvicam);
+	}
+
 	msleep(10);
 
-	/* Check ID of the connected TC358746 -> this is where the i2c address 0x0e is fetched and claimed (if present) */
+	/* Check ID of the connected TC358746 */
 	v4l2_err(&lvicam->sd, "Fetching device\n");
-	// if (((i2c_rd16(&lvicam->sd, CHIPID) & CHIPID_CHIPID_MASK) >> 8) != 0x44) {
-	// 	pr_err("[%s] : ERROR 3\n", __func__);
-	// 	v4l2_info(&lvicam->sd, "not a TC358746 on address 0x%x\n", client->addr << 1);
-	// 	err = -ENODEV;
-	// 	goto on_error;
-	// }
 
-	/* Todo controls, do we need them ?*/
-
+	/* Set current mode */
 	lvicam->curr_mode = &lvicam_modes[0];
 
 	/* Initialize subdev */
 	lvicam->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_HAS_EVENTS;
-	//todo V4L2_SUBDEV_FL_HAS_EVENTS?
 	lvicam->sd.entity.ops = &lvicam_entity_ops;
 	lvicam->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
 
@@ -1000,9 +1090,7 @@ static int lvicam_probe(struct i2c_client *client)
 
 	lvicam->fmt = tc358746_def_fmt;
 
-	//initialize lvicam_ctrl
-	lvicam_ctrl_device_init();
-
+	pr_info("[%s] Probe completed successfully\n", __func__);
 	return 0;
 
 error_media_entity:
@@ -1011,18 +1099,26 @@ error_media_entity:
 
 on_error:
 	pr_err("[%s] : ERROR : on_error\n", __func__);
+	// Note: mutex_destroy is handled in destroy_mutex label
+
+destroy_mutex:
 	mutex_destroy(&lvicam->mutex);
 	return err;
 }
 
 static int lvicam_remove(struct i2c_client *client)
 {
+	pr_info("[%s] Removing lvicam.\n", __func__);
+
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct lvicam *lvicam = to_lvicam(sd);
 
-	gpiod_set_value(lvicam->reset_gpio, 0); // Disable the power supply
-
-	pr_info("[%s] call\n", __func__);
+	pr_info("[%s] Resetting toshiba.\n", __func__);
+	gpiod_set_value(lvicam->reset_gpio, 0); // reset the toshiba converter chip
+	pr_info("[%s] De-asserting power pin.\n", __func__);
+	gpiod_set_value(lvicam->power_gpio, 0); // Disable the power supply
+	pr_info("[%s] Setting the onoff gpio LOW.\n", __func__);
+	lvicam_gpio_on_set(lvicam);
 
 	v4l2_async_unregister_subdev(sd);
 	media_entity_cleanup(&sd->entity);
