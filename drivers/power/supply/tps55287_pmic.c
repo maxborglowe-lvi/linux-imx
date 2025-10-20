@@ -12,6 +12,9 @@
 #include <linux/of_device.h>
 #include <linux/units.h>
 #include <linux/atomic.h>
+#include <linux/regulator/driver.h>
+#include <linux/regulator/machine.h>
+#include <linux/regulator/of_regulator.h>
 
 atomic_t tps55287_ready = ATOMIC_INIT(0);
 EXPORT_SYMBOL(tps55287_ready);
@@ -287,6 +290,75 @@ static int tps55287_apply_dt(struct tps55287 *tps)
 	return 0;
 }
 
+/*
+ * Returns the current output voltage in microvolts (uV).
+ * For this driver, we return the value that was programmed from DT.
+ */
+static int tps55287_get_voltage(struct regulator_dev *rdev)
+{
+	struct tps55287 *tps = rdev_get_drvdata(rdev);
+
+	/* If the regulator uses external feedback (fb_internal=false)
+     * or if the voltage wasn't programmed (vout_uv == 0),
+     * we cannot know the voltage, so we must return -EINVAL or 0.
+     * Returning 0 is often safer for a non-adjustable voltage.
+     * Returning the programmed value (tps->vout_uv) is the simplest solution.
+     */
+	if (tps->fb_internal)
+		return tps->vout_uv;
+
+	// For external feedback, we don't know the voltage, but we cannot fail probe.
+	// Since the DT specifies min/max, we should let the framework handle it
+	// based on those constraints if we don't implement full read-back from registers.
+	// For simplicity, let's assume the programmed internal voltage is what's expected.
+
+	// If you implemented tps55287_apply_dt() to skip programming for external FB,
+	// the following is the proper defensive check:
+	if (tps->vout_uv == 0)
+		return -EINVAL; // Must return error if we don't know the voltage
+
+	return tps->vout_uv;
+}
+
+/* Example implementation for regulator_enable */
+static int tps55287_enable(struct regulator_dev *rdev)
+{
+	// tps is usually retrieved from rdev->reg_data
+	struct tps55287 *tps = rdev_get_drvdata(rdev);
+
+	// In the TPS55287, the device is usually enabled by setting a bit
+	// in a control register (e.g., CONTROL_REG).
+	// The details depend on the specific driver implementation and register map.
+
+	return regmap_update_bits(tps->regmap, TPS55287_REG_MODE, TPS55287_MODE_OE, 1);
+}
+
+/* Example implementation for regulator_disable */
+static int tps55287_disable(struct regulator_dev *rdev)
+{
+	struct tps55287 *tps = rdev_get_drvdata(rdev);
+
+	return regmap_update_bits(tps->regmap, TPS55287_REG_MODE, TPS55287_MODE_OE, 0);
+}
+
+/* Define the operations structure */
+static const struct regulator_ops tps55287_regulator_ops = {
+	.enable = tps55287_enable,
+	.disable = tps55287_disable,
+	.get_voltage = tps55287_get_voltage, // <-- ADDED
+	// Add set_voltage, get_voltage, etc., here if supported
+};
+
+static const struct regulator_desc tps55287_reg_desc = {
+	.name = "tps55287_vcc", // Must match the "regulator-name" in DT for identification
+	.id = 0, // A unique ID for this regulator within the chip (often 0 if only one)
+	.type = REGULATOR_VOLTAGE,
+	.owner = THIS_MODULE,
+	.ops = &tps55287_regulator_ops, // Function pointers for enable/disable/get_voltage etc.
+	.n_voltages = 1, // If it was a fixed voltage, but typically handled by DT/regmap
+	// .of_match = of_match_ptr("regulator@0"), // Matches the DT node name/unit address
+};
+
 /* Probe/remove --------------------------------------------------------- */
 
 static int tps55287_probe(struct i2c_client *client)
@@ -294,6 +366,7 @@ static int tps55287_probe(struct i2c_client *client)
 	struct device *dev = &client->dev;
 	struct tps55287 *tps;
 	int ret;
+	struct device_node *child;
 
 	if (!dev->of_node)
 		return dev_err_probe(dev, -EINVAL, "No device-tree node\n");
@@ -312,6 +385,34 @@ static int tps55287_probe(struct i2c_client *client)
 	ret = tps55287_apply_dt(tps);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to apply DT settings\n");
+
+	struct regulator_config config = {};
+	struct regulator_dev *rdev;
+	struct device_node *node = client->dev.of_node;
+
+	// --- Search and register the child regulator nodes ---
+	for_each_child_of_node (node, child) {
+		// Look up the device tree node that defines the regulator
+		if (!of_device_is_compatible(child, "ti,tps55287-reg"))
+			continue;
+
+		// Populate the configuration structure
+		config.dev = dev;
+		config.init_data = of_get_regulator_init_data(dev, child, &tps55287_reg_desc);
+		config.driver_data = tps; // Pass the chip-specific data to the regulator ops
+		config.of_node = child;
+
+		// Register the regulator with the framework
+		rdev = devm_regulator_register(dev, &tps55287_reg_desc, &config);
+		if (IS_ERR(rdev)) {
+			ret = PTR_ERR(rdev);
+			dev_err_probe(dev, ret, "failed to register regulator\n");
+			return ret;
+		}
+
+		// The name tps55287_vcc in your DT will be the "label" used
+		dev_info(dev, "Registered regulator: %s\n", rdev->desc->name);
+	}
 
 	dev_info(dev, "TPS55287 configured and enabled\n");
 

@@ -400,8 +400,9 @@ config VIDEO_LVICAM
 	tristate "LVI bridge board"
 	depends on VIDEO_V4L2 && I2C && VIDEO_V4L2_SUBDEV_API && MEDIA_CONTROLLER
 	select V4L2_FWNODE
-	help
-	  TODO
+	select TPS55287_PMIC
+    help
+      LVI bridge board / camera driver.
 
 config VIDEO_TVP514X
 	tristate "Texas Instruments TVP514x video decoder"
