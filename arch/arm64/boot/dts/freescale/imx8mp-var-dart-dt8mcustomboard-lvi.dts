@@ -72,7 +72,7 @@
 
 		/* Documentation / devicetree / bindings / video / display-timing.txt */
 		panel-timing {
-			clock-frequency = <148500000>;  
+			clock-frequency = <144000000>;  
             hactive = <1920>;
             vactive = <1080>;
             hback-porch = <148>;
@@ -126,7 +126,7 @@
 	lvipwm: lvipwm {
 		status = "okay";
 		compatible = "lvi,lvipwm";
-		pwms = <&pwm1 0 255 0>; // PWM controller, channel, period, polarity
+		pwms = <&pwm1 0 1000000 0>; // PWM controller, channel, period (ns), polarity
 	};
 };
 
@@ -146,6 +146,49 @@
 	status = "okay";
 };
 
+&eqos {
+	mdio {
+		ethphy1: ethernet-phy@1 {
+			compatible = "ethernet-phy-ieee802.3-c22";
+			reg = <1>;
+			at803x,eee-disabled;
+			at803x,vddio-1p8v;
+			eee-broken-1000t;
+		};
+	};
+};
+
+&fec {
+    pinctrl-names = "default";
+    pinctrl-0 = <&pinctrl_fec>;
+    phy-mode = "rgmii-id";  /* or "rgmii-txid", "rgmii-rxid" depending on your hardware */
+    phy-handle = <&eth_vsc>;
+    fsl,magic-packet;
+	// phy-reset-gpios = <&pca6416 11 GPIO_ACTIVE_LOW>;
+	phy-reset-duration = <10>;
+	phy-reset-post-delay = <20>;
+	status = "okay";
+
+    mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        eth_vsc: ethernet-phy@0 {
+            compatible = "ethernet-phy-id0007.0570";  /* VSC8531 PHY ID */
+            reg = <0>;  /* MDIO address - adjust based on your hardware strapping */
+            
+            /* Optional: if you have a reset GPIO */
+            reset-gpios = <&pca6416 11 GPIO_ACTIVE_LOW>; 
+            reset-assert-us = <10000>; 
+            reset-deassert-us = <80000>; 
+            
+            /* Optional: LED configuration */
+            vsc8531,led-0-mode = <1>;  /* Link/Activity */
+            vsc8531,led-1-mode = <1>;  /* Link/Activity */
+        };
+    };
+};
+
 &i2c2 {
 	clock-frequency = <400000>;
 	pinctrl-names = "default", "gpio";
@@ -158,7 +201,7 @@
 	
 
 	pca6416: gpio@20 {
-		compatible = "nxp,pcal6416";
+		compatible = "ti,tca6416";
 		reg = <0x20>;
 		gpio-controller;
 		#gpio-cells = <2>;
@@ -254,7 +297,7 @@
 	sda-gpios = <&gpio5 19 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 
-	mcp4018_vled: digipot@2f {
+	mcp4018_vled: digipot@2f { //MCP4018T-503E
         compatible = "microchip,mcp4018-503";
         reg = <0x2f>;                /* I²C address */
         /* Optional: initial wiper value */
@@ -310,19 +353,21 @@
 	sda-gpios = <&gpio5 21 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 
-	mcp40d18_vcam: digipot@3e {
+	//voltage control can be done solely by the tps55287 PMIC
+	// mcp4018_vdisp: digipot@2f { //MCP4018T-503E
+    //     compatible = "microchip,mcp4018-503";
+    //     reg = <0x2f>;                /* I²C address */
+    //     /* Optional: initial wiper value */
+    //     microchip,initial-ohms = <30000>; //10kohm
+    // };
+
+	mcp4018_vcam: digipot@3e { //MCP40D18T-503AE
         compatible = "microchip,mcp4018-503";  /* MCP40D18 is register-compatible */
         reg = <0x3e>;
-        microchip,initial-ohms = <6000>; //6kohm
+        microchip,initial-ohms = <4800>; //6kohm
     };
 
-	mcp4018_vdisp: digipot@2f {
-        compatible = "microchip,mcp4018-503";
-        reg = <0x2f>;                /* I²C address */
-        /* Optional: initial wiper value */
-        microchip,initial-ohms = <10000>; //10kohm
-    };
-
+	
 	lvibattery@b {
         compatible = "lvi,lvibattery";
 		reg = <0xb>;    // EEPROM I2C address
@@ -374,7 +419,7 @@
 		/* Use internal feedback path; program VOUT via I2C */
 		ti,internal-feedback;         /* default true if omitted */
 		ti,intfb-ratio = <3>;         /* 0:0.2256, 1:0.1128, 2:0.0752, 3:0.0564 (=> 10 mV steps) */
-		ti,vout-microvolt = <13000000>;/* 13.0 V */
+		ti,vout-microvolt = <11000000>;/* 13.0 V */
 
 		/* Output current limit using sense resistor on ISP/ISN */
 		ti,ilim-milliamp = <2500>;    /* 2.5 A */

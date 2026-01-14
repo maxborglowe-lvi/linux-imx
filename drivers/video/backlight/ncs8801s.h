@@ -51,6 +51,7 @@ struct reg_data {
 // clang-format off
 //0x70 configuration
 static struct reg_data id1_1920_1080_regs[] = {
+	{0x00, 0x00},
 	{0x10, 0x08},
 	{0x11, 0x98},
 	{0x16, 0x04},

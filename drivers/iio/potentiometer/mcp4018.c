@@ -168,15 +168,12 @@ static int mcp4018_probe(struct i2c_client *client)
 
 		if (initial_ohms > 0 && initial_ohms <= data->cfg->kohms * 1000) {
 			/* Scale ohms into raw wiper step (0..127) */
+			/* Scale ohms into raw wiper step (0..127) */
 			wiper_val = DIV_ROUND_CLOSEST(initial_ohms * MCP4018_WIPER_MAX, data->cfg->kohms * 1000);
 
-			uint8_t buf[2];
-			struct i2c_client *c = data->client;
-
-			buf[0] = 0x00; /* command register: write wiper */
-			buf[1] = wiper_val; /* new wiper value */
-
-			ret = i2c_master_send(c, buf, 2);
+			/* MCP4018 uses single-byte SMBUS write - no command register */
+			ret = i2c_smbus_write_byte(data->client, wiper_val);
+			
 			if (ret < 0) {
 				printk("[%s] failed to set initial resistance (%d)\n", __func__, ret);
 			} else {

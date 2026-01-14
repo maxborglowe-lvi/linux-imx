@@ -299,3 +299,5 @@ $ sudo cp /home/maxborglowe/var-fsl-yocto/rootfs/* /media/maxborglowe/rootfs
 
 Install the device trees:
 $ sudo cp arch/arm64/boot/dts/freescale/*imx*var*.dtb /media/maxborglowe/rootfs/boot/
+
+# ISSUES
