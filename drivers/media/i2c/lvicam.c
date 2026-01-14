@@ -614,14 +614,14 @@ static void lvicam_gpio_on_set(struct lvicam *lvicam)
 {
 	pr_info("[%s] call\n", __func__);
 	gpiod_set_value_cansleep(lvicam->onoff_gpio, 1);
-	usleep_range(5000, 10000);
+	// usleep_range(5000, 10000);
 }
 
 static void lvicam_gpio_off_set(struct lvicam *lvicam)
 {
 	pr_info("[%s] call\n", __func__);
 	gpiod_set_value_cansleep(lvicam->onoff_gpio, 0);
-	usleep_range(5000, 10000);
+	// usleep_range(5000, 10000);
 }
 
 static int lvicam_s_power(struct v4l2_subdev *sd, int on)
@@ -754,14 +754,14 @@ static int lvicam_fasync(int fd, struct file *file, int on)
 
 static long lvicam_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	struct lvicam_i2c_cmd i2c_cmd;
-	if (copy_from_user(&i2c_cmd, (void __user *)arg, sizeof(i2c_cmd)))
-		return -EFAULT;
-
 	int ret;
 
 	switch (cmd) {
 	case LVICAM_CTRL_IOCTL_WRITE_DATA: {
+		struct lvicam_i2c_cmd i2c_cmd;
+		if (copy_from_user(&i2c_cmd, (void __user *)arg, sizeof(i2c_cmd)))
+			return -EFAULT;
+
 		if (i2c_cmd.size != 1 && i2c_cmd.size != 2)
 			return -EINVAL;
 
@@ -791,6 +791,10 @@ static long lvicam_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	}
 
 	case LVICAM_CTRL_IOCTL_READ_DATA: {
+		struct lvicam_i2c_cmd i2c_cmd;
+		if (copy_from_user(&i2c_cmd, (void __user *)arg, sizeof(i2c_cmd)))
+			return -EFAULT;
+
 		if (i2c_cmd.size != 1 && i2c_cmd.size != 2)
 			return -EINVAL;
 
@@ -816,11 +820,11 @@ static long lvicam_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (ret != 2)
 			return -EIO;
 
-		// Combine bytes read from single subreg read
+		/* Combine bytes read from single subreg read */
 		if (i2c_cmd.size == 1) {
 			i2c_cmd.data = read_buf[0];
 		} else if (i2c_cmd.size == 2) {
-			i2c_cmd.data = (read_buf[0] << 8) | read_buf[1]; // MSB first
+			i2c_cmd.data = (read_buf[0] << 8) | read_buf[1]; /* MSB first */
 		}
 
 		pr_info("[%s] READ: subreg=0x%02X, size=%zu -> data=0x%02X%02X\n", __func__, subreg, i2c_cmd.size, read_buf[0], read_buf[1]);
@@ -895,7 +899,7 @@ static int lvicam_ctrl_device_init(struct i2c_client *client)
 		lvicam_gpio_off_set(lvicam);
 	}
 
-	usleep_range(10000, 20000); // Wait 1-5 seconds
+	usleep_range(80000, 100000); // Wait 80-100 milliseconds
 
 	if (lvicam->onoff_gpio) {
 		pr_info("[%s] Setting the onoff gpio HIGH.\n", __func__);
@@ -915,6 +919,28 @@ del_cdev:
 unregister:
 	unregister_chrdev_region(lvicam_ctrl.dev_num, 1);
 	return ret;
+}
+
+static void lvicam_ctrl_device_cleanup(void)
+{
+	if (lvicam_ctrl.client) {
+		i2c_unregister_device(lvicam_ctrl.client);
+		lvicam_ctrl.client = NULL;
+	}
+
+	if (lvicam_ctrl.adapter) {
+		i2c_put_adapter(lvicam_ctrl.adapter);
+		lvicam_ctrl.adapter = NULL;
+	}
+
+	if (lvicam_ctrl.class) {
+		device_destroy(lvicam_ctrl.class, lvicam_ctrl.dev_num);
+		class_destroy(lvicam_ctrl.class);
+		lvicam_ctrl.class = NULL;
+	}
+
+	cdev_del(&lvicam_ctrl.cdev);
+	unregister_chrdev_region(lvicam_ctrl.dev_num, 1);
 }
 
 /** @brief IRQ handler for seesaw input GPIO
@@ -982,8 +1008,8 @@ static int lvicam_probe(struct i2c_client *client)
 		}
 		goto destroy_mutex;
 	}
-	pr_info("[%s] power GPIO found. Initialized HIGH.\n", __func__);
-	gpiod_set_value(lvicam->power_gpio, 1);
+	// pr_info("[%s] power GPIO found. Initialized HIGH.\n", __func__);
+	// gpiod_set_value(lvicam->power_gpio, 1);
 
 	// Get ONOFF GPIO
 	v4l2_err(&lvicam->sd, "Fetching onoff gpio\n");
@@ -996,7 +1022,7 @@ static int lvicam_probe(struct i2c_client *client)
 		goto destroy_mutex;
 	} else if (lvicam->onoff_gpio) {
 		pr_info("[%s] onoff GPIO found\n", __func__);
-		gpiod_set_value_cansleep(lvicam->onoff_gpio, 1); // Set onoff GPIO high
+		// gpiod_set_value_cansleep(lvicam->onoff_gpio, 1); // Set onoff GPIO high
 	} else {
 		pr_info("[%s] onoff GPIO not found, assuming always enabled\n", __func__);
 	}
@@ -1078,7 +1104,7 @@ static int lvicam_probe(struct i2c_client *client)
 	if (err) {
 		pr_err("[%s] : ERROR 4\n", __func__);
 		v4l2_err(&lvicam->sd, "failed to init entity pads: %d", err);
-		goto on_error;
+		goto ctrl_cleanup;
 	}
 
 	err = v4l2_async_register_subdev_sensor_common(&lvicam->sd);
@@ -1097,9 +1123,9 @@ error_media_entity:
 	pr_err("[%s] : ERROR : error_media_entity\n", __func__);
 	media_entity_cleanup(&lvicam->sd.entity);
 
-on_error:
-	pr_err("[%s] : ERROR : on_error\n", __func__);
-	// Note: mutex_destroy is handled in destroy_mutex label
+ctrl_cleanup:
+	pr_err("[%s] : ERROR : ctrl_cleanup\n", __func__);
+	lvicam_ctrl_device_cleanup();
 
 destroy_mutex:
 	mutex_destroy(&lvicam->mutex);
@@ -1118,10 +1144,13 @@ static int lvicam_remove(struct i2c_client *client)
 	pr_info("[%s] De-asserting power pin.\n", __func__);
 	gpiod_set_value(lvicam->power_gpio, 0); // Disable the power supply
 	pr_info("[%s] Setting the onoff gpio LOW.\n", __func__);
-	lvicam_gpio_on_set(lvicam);
+	// lvicam_gpio_on_set(lvicam);
 
 	v4l2_async_unregister_subdev(sd);
 	media_entity_cleanup(&sd->entity);
+
+	// Cleanup character device
+	lvicam_ctrl_device_cleanup();
 
 	mutex_destroy(&lvicam->mutex);
 

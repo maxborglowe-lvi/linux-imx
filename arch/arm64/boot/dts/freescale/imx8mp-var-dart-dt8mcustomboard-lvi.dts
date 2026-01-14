@@ -72,7 +72,7 @@
 
 		/* Documentation / devicetree / bindings / video / display-timing.txt */
 		panel-timing {
-			clock-frequency = <148500000>;  
+			clock-frequency = <144000000>;  
             hactive = <1920>;
             vactive = <1080>;
             hback-porch = <148>;
@@ -126,8 +126,7 @@
 	lvipwm: lvipwm {
 		status = "okay";
 		compatible = "lvi,lvipwm";
-		pwms = <&pwm1 0 65535 0>; // PWM controller, channel, period, polarity
-		// label = "pwm-led";
+		pwms = <&pwm1 0 1000000 0>; // PWM controller, channel, period (ns), polarity
 	};
 };
 
@@ -339,7 +338,7 @@
 	sda-gpios = <&gpio5 19 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 
-	mcp4018_vled: digipot@2f {
+	mcp4018_vled: digipot@2f { //MCP4018T-503E
         compatible = "microchip,mcp4018-503";
         reg = <0x2f>;                /* I²C address */
         /* Optional: initial wiper value */
@@ -416,19 +415,21 @@
 	sda-gpios = <&gpio5 21 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 
-    mcp40d18_vcam: digipot@3e {
+	//voltage control can be done solely by the tps55287 PMIC
+	// mcp4018_vdisp: digipot@2f { //MCP4018T-503E
+    //     compatible = "microchip,mcp4018-503";
+    //     reg = <0x2f>;                /* I²C address */
+    //     /* Optional: initial wiper value */
+    //     microchip,initial-ohms = <30000>; //10kohm
+    // };
+
+	mcp4018_vcam: digipot@3e { //MCP40D18T-503AE
         compatible = "microchip,mcp4018-503";  /* MCP40D18 is register-compatible */
         reg = <0x3e>;
-        microchip,initial-ohms = <6000>; //6kohm
+        microchip,initial-ohms = <4800>; //6kohm
     };
 
-	mcp4018_vdisp: digipot@2f {
-        compatible = "microchip,mcp4018-503";
-        reg = <0x2f>;                /* I²C address */
-        /* Optional: initial wiper value */
-        microchip,initial-ohms = <10000>; //10kohm
-    };
-
+	
 	lvibattery@b {
         compatible = "lvi,lvibattery";
 		reg = <0xb>;    
@@ -482,7 +483,7 @@
 		/* Use internal feedback path; program VOUT via I2C */
 		ti,internal-feedback;         /* default true if omitted */
 		ti,intfb-ratio = <3>;         /* 0:0.2256, 1:0.1128, 2:0.0752, 3:0.0564 (=> 10 mV steps) */
-		ti,vout-microvolt = <13000000>;/* 13.0 V */
+		ti,vout-microvolt = <11000000>;/* 13.0 V */
 
 		/* Output current limit using sense resistor on ISP/ISN */
 		ti,ilim-milliamp = <2500>;    /* 2.5 A */

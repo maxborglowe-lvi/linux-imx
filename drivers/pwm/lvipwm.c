@@ -11,73 +11,110 @@
 
 #define PWM_MAGIC 'P'
 
-#define PWM_IOCTL_SET_DUTY _IOW(PWM_MAGIC, 0, int)
-#define PWM_IOCTL_SET_PERIOD _IOW(PWM_MAGIC, 1, int)
+#define PWM_IOCTL_SET_DUTY _IOW(PWM_MAGIC, 0, unsigned long)
+#define PWM_IOCTL_SET_PERIOD _IOW(PWM_MAGIC, 1, unsigned long)
 #define PWM_IOCTL_ENABLE _IO(PWM_MAGIC, 2)
 #define PWM_IOCTL_DISABLE _IO(PWM_MAGIC, 3)
-#define PWM_IOCTL_GET_DUTY _IOR(PWM_MAGIC, 4, int)
+#define PWM_IOCTL_GET_DUTY _IOR(PWM_MAGIC, 4, unsigned long)
 
 #define DEVICE_NAME "lvipwm"
 
 struct lvipwm_drvdata {
 	struct pwm_device *pwm;
-	struct cdev cdev; // Add this cdev member
+	struct cdev cdev;
+	struct pwm_state state; // Per-device state
+	struct device *device;
+	dev_t devno;
 };
 
 static int major;
 static struct class *pwm_class;
-struct pwm_args pargs;
-struct pwm_state state;
-
-unsigned char pwm_state_checked = 0;
 
 static long lvipwm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct lvipwm_drvdata *drvdata = file->private_data;
 	struct pwm_device *pwm = drvdata->pwm;
-	int value;
+	unsigned long value;
+	int ret;
 
 	if (!pwm) {
 		pr_err("[%s] PWM device is NULL!\n", __func__);
 		return -ENODEV;
 	}
 
-	pr_info("[%s] IOCTL cmd=0x%x, duty_cycle=%llu, period=%llu, enabled=%d\n", __func__, cmd, (unsigned long long)state.duty_cycle, (unsigned long long)state.period, state.enabled);
+	pr_info("[%s] IOCTL cmd=0x%x\n", __func__, cmd);
 
 	switch (cmd) {
 	case PWM_IOCTL_SET_DUTY:
-		if (copy_from_user(&value, (int __user *)arg, sizeof(int))) {
+		if (copy_from_user(&value, (unsigned long __user *)arg, sizeof(unsigned long))) {
 			pr_err("[%s] copy_from_user failed for SET_DUTY\n", __func__);
 			return -EFAULT;
 		}
-		pr_info("[%s] Setting duty cycle to %d\n", __func__, value);
-		state.duty_cycle = value;
+
+		// Validate duty cycle doesn't exceed period
+		if (value > drvdata->state.period) {
+			pr_err("[%s] Duty cycle %lu exceeds period %llu\n", __func__, value, drvdata->state.period);
+			return -EINVAL;
+		}
+
+		pr_info("[%s] Setting duty cycle to %lu (period=%llu)\n", __func__, value, drvdata->state.period);
+
+		drvdata->state.duty_cycle = value;
+		ret = pwm_apply_state(pwm, &drvdata->state);
+		if (ret < 0) {
+			pr_err("[%s] pwm_apply_state failed: %d\n", __func__, ret);
+			return ret;
+		}
 		break;
 
 	case PWM_IOCTL_SET_PERIOD:
-		if (copy_from_user(&value, (int __user *)arg, sizeof(int))) {
+		if (copy_from_user(&value, (unsigned long __user *)arg, sizeof(unsigned long))) {
 			pr_err("[%s] copy_from_user failed for SET_PERIOD\n", __func__);
 			return -EFAULT;
 		}
-		pr_info("[%s] Setting period to %d\n", __func__, value);
-		state.period = value;
+
+		pr_info("[%s] Setting period to %lu\n", __func__, value);
+		drvdata->state.period = value;
+
+		// Adjust duty cycle if it exceeds new period
+		if (drvdata->state.duty_cycle > drvdata->state.period) {
+			drvdata->state.duty_cycle = drvdata->state.period;
+		}
+
+		ret = pwm_apply_state(pwm, &drvdata->state);
+		if (ret < 0) {
+			pr_err("[%s] pwm_apply_state failed: %d\n", __func__, ret);
+			return ret;
+		}
 		break;
+
 	case PWM_IOCTL_GET_DUTY:
-		if (copy_to_user((int __user *)arg, &state.duty_cycle, sizeof(int))) {
+		value = drvdata->state.duty_cycle;
+		if (copy_to_user((unsigned long __user *)arg, &value, sizeof(unsigned long))) {
 			pr_err("[%s] copy_to_user failed for GET_DUTY\n", __func__);
 			return -EFAULT;
 		}
-		pr_info("[%s] Getting duty cycle: %llu\n", __func__, (unsigned long long)state.duty_cycle);
+		pr_info("[%s] Getting duty cycle: %lu\n", __func__, value);
 		return 0;
 
 	case PWM_IOCTL_ENABLE:
 		pr_info("[%s] Enabling PWM\n", __func__);
-		state.enabled = true;
+		drvdata->state.enabled = true;
+		ret = pwm_apply_state(pwm, &drvdata->state);
+		if (ret < 0) {
+			pr_err("[%s] pwm_apply_state failed: %d\n", __func__, ret);
+			return ret;
+		}
 		break;
 
 	case PWM_IOCTL_DISABLE:
 		pr_info("[%s] Disabling PWM\n", __func__);
-		state.enabled = false;
+		drvdata->state.enabled = false;
+		ret = pwm_apply_state(pwm, &drvdata->state);
+		if (ret < 0) {
+			pr_err("[%s] pwm_apply_state failed: %d\n", __func__, ret);
+			return ret;
+		}
 		break;
 
 	default:
@@ -85,7 +122,7 @@ static long lvipwm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return -EINVAL;
 	}
 
-	return pwm_apply_state(pwm, &state);
+	return 0;
 }
 
 static int lvipwm_open(struct inode *inode, struct file *file)
@@ -116,9 +153,7 @@ static int lvipwm_probe(struct platform_device *pdev)
 {
 	struct lvipwm_drvdata *drvdata;
 	struct device *dev = &pdev->dev;
-	struct device_node *np = dev->of_node;
-	struct device *device;
-	dev_t devno;
+	struct pwm_args pargs;
 	int ret;
 
 	pr_info("[%s] called\n", __func__);
@@ -129,26 +164,27 @@ static int lvipwm_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	drvdata->pwm = of_pwm_get(dev, np, NULL);
+	drvdata->pwm = devm_pwm_get(dev, NULL);
 	if (IS_ERR(drvdata->pwm)) {
-		pr_err("[%s] Unable to get PWM device: %ld\n", __func__, PTR_ERR(drvdata->pwm));
-		return PTR_ERR(drvdata->pwm);
+		ret = PTR_ERR(drvdata->pwm);
+		pr_err("[%s] Unable to get PWM device: %d\n", __func__, ret);
+		return ret;
 	}
 
 	pr_info("[%s] PWM device fetched from device tree\n", __func__);
 
-	ret = alloc_chrdev_region(&devno, 0, 1, DEVICE_NAME);
+	ret = alloc_chrdev_region(&drvdata->devno, 0, 1, DEVICE_NAME);
 	if (ret < 0) {
 		pr_err("[%s] alloc_chrdev_region failed: %d\n", __func__, ret);
 		return ret;
 	}
 
-	major = MAJOR(devno);
+	major = MAJOR(drvdata->devno);
 
 	cdev_init(&drvdata->cdev, &fops);
 	drvdata->cdev.owner = THIS_MODULE;
 
-	ret = cdev_add(&drvdata->cdev, devno, 1);
+	ret = cdev_add(&drvdata->cdev, drvdata->devno, 1);
 	if (ret < 0) {
 		pr_err("[%s] cdev_add failed: %d\n", __func__, ret);
 		goto unregister_region;
@@ -161,9 +197,9 @@ static int lvipwm_probe(struct platform_device *pdev)
 		goto del_cdev;
 	}
 
-	device = device_create(pwm_class, NULL, devno, NULL, DEVICE_NAME);
-	if (IS_ERR(device)) {
-		ret = PTR_ERR(device);
+	drvdata->device = device_create(pwm_class, NULL, drvdata->devno, NULL, DEVICE_NAME);
+	if (IS_ERR(drvdata->device)) {
+		ret = PTR_ERR(drvdata->device);
 		pr_err("[%s] device_create failed: %d\n", __func__, ret);
 		goto destroy_class;
 	}
@@ -172,61 +208,67 @@ static int lvipwm_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, drvdata);
 
-	/* Fetch PWM data from DT and apply the duty cycles stored in the configuration (fetched from EEPROM at boot) */
+	/* Initialize PWM state from device tree and EEPROM config */
 	pwm_get_args(drvdata->pwm, &pargs);
-	pwm_get_state(drvdata->pwm, &state);
-	state.period = pargs.period;
-	state.duty_cycle = confLighting.Intensity.data[0] | (confLighting.Intensity.data[1] << 8);
-	state.polarity = pargs.polarity;
-	state.enabled = true;
+	pwm_init_state(drvdata->pwm, &drvdata->state);
 
-	pr_info("[%s] PWM args set\n", __func__);
+	drvdata->state.period = pargs.period;
+	drvdata->state.polarity = pargs.polarity;
 
-	ret = pwm_apply_state(drvdata->pwm, &state);
-	if (ret < 0) {
-		pr_err("[%s] pwm_apply_state failed: %d\n", __func__, ret);
-		goto destroy_class;
+	// Read duty cycle from EEPROM config
+	drvdata->state.duty_cycle = confLighting.Intensity.data[0] | (confLighting.Intensity.data[1] << 8);
+
+	// Validate duty cycle
+	if (drvdata->state.duty_cycle > drvdata->state.period) {
+		pr_warn("[%s] Duty cycle %llu exceeds period %llu, capping\n", __func__, drvdata->state.duty_cycle, drvdata->state.period);
+		drvdata->state.duty_cycle = drvdata->state.period;
 	}
 
-	pr_info("[%s] PWM state applied\n", __func__);
+	drvdata->state.enabled = true;
 
-	pr_info("[%s] Initializing PWM state: period=%llu, duty_cycle=%llu, enabled=%d\n", __func__, (unsigned long long)state.period, (unsigned long long)state.duty_cycle, state.enabled);
+	pr_info("[%s] Initializing PWM: period=%llu ns, duty_cycle=%llu ns, polarity=%d\n", __func__, drvdata->state.period, drvdata->state.duty_cycle, drvdata->state.polarity);
 
-	pr_info("[%s] lvipwm driver probed\n", __func__);
+	ret = pwm_apply_state(drvdata->pwm, &drvdata->state);
+	if (ret < 0) {
+		pr_err("[%s] pwm_apply_state failed: %d\n", __func__, ret);
+		goto destroy_device;
+	}
+
+	pr_info("[%s] PWM state applied successfully\n", __func__);
+	pr_info("[%s] lvipwm driver probed successfully\n", __func__);
+
 	return 0;
 
+destroy_device:
+	device_destroy(pwm_class, drvdata->devno);
 destroy_class:
 	class_destroy(pwm_class);
 del_cdev:
 	cdev_del(&drvdata->cdev);
 unregister_region:
-	unregister_chrdev_region(devno, 1);
+	unregister_chrdev_region(drvdata->devno, 1);
 	return ret;
 }
 
 static int lvipwm_remove(struct platform_device *pdev)
 {
 	struct lvipwm_drvdata *drvdata = platform_get_drvdata(pdev);
-	dev_t devno = MKDEV(major, 0);
 
 	pr_info("[%s] called\n", __func__);
 
-	pwm_disable(drvdata->pwm);
-	pwm_put(drvdata->pwm);
-
-	device_destroy(pwm_class, devno);
-	class_destroy(pwm_class);
-	cdev_del(&drvdata->cdev);
-	unregister_chrdev_region(devno, 1);
+	if (drvdata) {
+		pwm_disable(drvdata->pwm);
+		device_destroy(pwm_class, drvdata->devno);
+		class_destroy(pwm_class);
+		cdev_del(&drvdata->cdev);
+		unregister_chrdev_region(drvdata->devno, 1);
+	}
 
 	pr_info("[%s] lvipwm driver removed\n", __func__);
 	return 0;
 }
 
-static const struct of_device_id lvipwm_of_match[] = { {
-							       .compatible = "lvi,lvipwm",
-						       },
-						       { /* sentinel */ } };
+static const struct of_device_id lvipwm_of_match[] = { { .compatible = "lvi,lvipwm" }, { /* sentinel */ } };
 MODULE_DEVICE_TABLE(of, lvipwm_of_match);
 
 static struct platform_driver lvipwm_driver = {
