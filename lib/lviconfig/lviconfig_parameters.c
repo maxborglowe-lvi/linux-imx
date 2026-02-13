@@ -252,8 +252,8 @@ void ConfigParam_InitAll(void)
 		confCameraMode[i].ZoomMax = ConfigParam_Init("ZoomMax", &default_numeric_data, TYPE_16);
 		confCameraMode[i].ZoomSpeed = ConfigParam_Init("ZoomSpeed", &default_numeric_data, TYPE_16);
 		confCameraMode[i].Focus = ConfigParam_Init("Focus", &default_numeric_data, TYPE_32);
-		confCameraMode[i].FocusMin = ConfigParam_Init("FocusMin", &default_numeric_data, TYPE_32);
-		confCameraMode[i].FocusMax = ConfigParam_Init("FocusMax", &default_numeric_data, TYPE_32);
+		confCameraMode[i].FocusRangeMin = ConfigParam_Init("FocusRangeMin", &default_numeric_data, TYPE_32);
+		confCameraMode[i].FocusRangeMax = ConfigParam_Init("FocusRangeMax", &default_numeric_data, TYPE_32);
 		confCameraMode[i].FocusSpeed = ConfigParam_Init("FocusSpeed", &default_numeric_data, TYPE_32);
 		confCameraMode[i].NaturalColorExposure = ConfigParam_Init("NaturalColorExposure", &default_numeric_data, TYPE_32);
 		confCameraMode[i].ArtificialColorExposure = ConfigParam_Init("ArtificialColorExposure", &default_numeric_data, TYPE_32);
@@ -516,10 +516,10 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 						param = &confCameraMode[index].ZoomSpeed;
 					else if (strcmp(token, "Focus") == 0)
 						param = &confCameraMode[index].Focus;
-					else if (strcmp(token, "FocusMin") == 0)
-						param = &confCameraMode[index].FocusMin;
-					else if (strcmp(token, "FocusMax") == 0)
-						param = &confCameraMode[index].FocusMax;
+					else if (strcmp(token, "FocusRangeMin") == 0)
+						param = &confCameraMode[index].FocusRangeMin;
+					else if (strcmp(token, "FocusRangeMax") == 0)
+						param = &confCameraMode[index].FocusRangeMax;
 					else if (strcmp(token, "FocusSpeed") == 0)
 						param = &confCameraMode[index].FocusSpeed;
 					else if (strcmp(token, "NaturalColorExposure") == 0)
@@ -696,46 +696,72 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 }
 
 /**
- * @brief Set the parameter's data and write the data to EEPROM on the corresponding parameter EEPROM address
+ * @brief Set the parameter's data and write the data to EEPROM on the corresponding parameter EEPROM address.
+ * Reads current EEPROM data first and only writes bytes that differ to reduce EEPROM wear.
  * @param param: Parameter to be altered
  * @param data: Data to be written to parameter's data variable
  */
 void ConfigParam_SetData(ConfigParam *param, const void *data)
 {
 	uint8_t i;
+	uint8_t *new_data;
+	uint8_t eeprom_byte;
+	int needs_write;
 
 	if (!param || !param->data || !data)
 		return;
 
+	/* Allocate temporary buffer for new data */
+	new_data = (uint8_t *)kmalloc(param->size, GFP_KERNEL);
+	if (!new_data)
+		return;
+
+	/* Convert input data to byte array based on type */
 	switch (param->type) {
 	case TYPE_8:
-		memcpy(param->data, data, param->size);
+		memcpy(new_data, data, param->size);
 		break;
 	case TYPE_16:
-		param->data[0] = ((uint16_t *)data)[0] & 0xFF;
-		param->data[1] = (((uint16_t *)data)[0] >> 8) & 0xFF;
+		new_data[0] = ((uint16_t *)data)[0] & 0xFF;
+		new_data[1] = (((uint16_t *)data)[0] >> 8) & 0xFF;
 		break;
 	case TYPE_32:
-		param->data[0] = ((uint32_t *)data)[0] & 0xFF;
-		param->data[1] = (((uint32_t *)data)[0] >> 8) & 0xFF;
-		param->data[2] = (((uint32_t *)data)[0] >> 16) & 0xFF;
-		param->data[3] = (((uint32_t *)data)[0] >> 24) & 0xFF;
+		new_data[0] = ((uint32_t *)data)[0] & 0xFF;
+		new_data[1] = (((uint32_t *)data)[0] >> 8) & 0xFF;
+		new_data[2] = (((uint32_t *)data)[0] >> 16) & 0xFF;
+		new_data[3] = (((uint32_t *)data)[0] >> 24) & 0xFF;
 		break;
 	case TYPE_ARRAY:
-		memcpy(param->data, data, param->size);
+		memcpy(new_data, data, param->size);
 		break;
 	case TYPE_STRING:
-		strncpy((char *)param->data, (const char *)data, param->size - 1);
-		param->data[param->size - 1] = '\0';
+		strncpy((char *)new_data, (const char *)data, param->size - 1);
+		new_data[param->size - 1] = '\0';
 		break;
 	default:
+		kfree(new_data);
 		return;
 	}
 
+	/* Read EEPROM and write only bytes that differ */
 	for (i = 0; i < param->size; i++) {
-		if (lviconfig_platform_eeprom_write(param->address + i, param->data[i]) != 0) {
+		needs_write = 1;
+		if (lviconfig_platform_eeprom_read(param->address + i, &eeprom_byte) == 0) {
+			if (eeprom_byte == new_data[i]) {
+				needs_write = 0; /* Data matches, skip write */
+			}
+		}
+		if (needs_write) {
+			if (lviconfig_platform_eeprom_write(param->address + i, new_data[i]) != 0) {
+				pr_err("[%s]: Failed to write byte %u of param %s\n",
+				       __func__, i, param->name ? param->name : "UNKNOWN");
+			}
 		}
 	}
+
+	/* Update param->data with the new data */
+	memcpy(param->data, new_data, param->size);
+	kfree(new_data);
 }
 
 /**
@@ -834,8 +860,8 @@ void ConfigParam_ParseEEPROM(void)
 		ConfigParam_GetData(&confCameraMode[i].ZoomMax);
 		ConfigParam_GetData(&confCameraMode[i].ZoomSpeed);
 		ConfigParam_GetData(&confCameraMode[i].Focus);
-		ConfigParam_GetData(&confCameraMode[i].FocusMin);
-		ConfigParam_GetData(&confCameraMode[i].FocusMax);
+		ConfigParam_GetData(&confCameraMode[i].FocusRangeMin);
+		ConfigParam_GetData(&confCameraMode[i].FocusRangeMax);
 		ConfigParam_GetData(&confCameraMode[i].FocusSpeed);
 		ConfigParam_GetData(&confCameraMode[i].NaturalColorExposure);
 		ConfigParam_GetData(&confCameraMode[i].ArtificialColorExposure);
@@ -1044,8 +1070,8 @@ void ConfigParam_PrintAll(void)
 		ConfigParam_PrintParam(&confCameraMode[i].ZoomMax);
 		ConfigParam_PrintParam(&confCameraMode[i].ZoomSpeed);
 		ConfigParam_PrintParam(&confCameraMode[i].Focus);
-		ConfigParam_PrintParam(&confCameraMode[i].FocusMin);
-		ConfigParam_PrintParam(&confCameraMode[i].FocusMax);
+		ConfigParam_PrintParam(&confCameraMode[i].FocusRangeMin);
+		ConfigParam_PrintParam(&confCameraMode[i].FocusRangeMax);
 		ConfigParam_PrintParam(&confCameraMode[i].FocusSpeed);
 		ConfigParam_PrintParam(&confCameraMode[i].NaturalColorExposure);
 		ConfigParam_PrintParam(&confCameraMode[i].ArtificialColorExposure);
@@ -1114,3 +1140,188 @@ void ConfigParam_PrintAll(void)
 
 	pr_info("[%s] --- End of Configuration Parameters (Kernel) ---\n", __func__);
 }
+
+/**
+ * @brief Save a single parameter to EEPROM if it differs from EEPROM contents.
+ * Reads EEPROM data first and only writes bytes that differ to reduce EEPROM wear.
+ * @param param: Parameter to save
+ * @return: 1 if parameter was written, 0 if no write needed, negative on error
+ */
+int ConfigParam_SaveParam(ConfigParam *param)
+{
+	uint8_t i;
+	uint8_t eeprom_byte;
+	int needs_write;
+	int wrote_any = 0;
+
+	if (!param || !param->data)
+		return -EINVAL;
+
+	for (i = 0; i < param->size; i++) {
+		needs_write = 1;
+		if (lviconfig_platform_eeprom_read(param->address + i, &eeprom_byte) == 0) {
+			if (eeprom_byte == param->data[i]) {
+				needs_write = 0; /* Data matches, skip write */
+			}
+		}
+		if (needs_write) {
+			if (lviconfig_platform_eeprom_write(param->address + i, param->data[i]) != 0) {
+				pr_err("[%s]: Failed to write byte %u of param %s\n",
+				       __func__, i, param->name ? param->name : "UNKNOWN");
+				return -EIO;
+			}
+			wrote_any = 1;
+		}
+	}
+
+	if (wrote_any) {
+		pr_info("[%s]: Wrote param %s (addr=0x%04X, size=%u)\n",
+			__func__, param->name ? param->name : "UNKNOWN",
+			param->address, param->size);
+	}
+
+	return wrote_any;
+}
+EXPORT_SYMBOL(ConfigParam_SaveParam);
+
+/**
+ * @brief Save all configuration parameters to EEPROM.
+ * Only writes parameters that differ from current EEPROM contents.
+ * @return: Number of parameters that were written, or negative error code
+ */
+int ConfigParam_SaveAll(void)
+{
+	uint8_t i;
+	int ret;
+	int total_written = 0;
+
+	/* Helper macro to save param and track count */
+	#define SAVE_AND_COUNT(p) do { \
+		ret = ConfigParam_SaveParam(p); \
+		if (ret < 0) return ret; \
+		total_written += ret; \
+	} while (0)
+
+	pr_info("[%s]: Starting save of all configuration parameters\n", __func__);
+
+	/* confProductId */
+	SAVE_AND_COUNT(&confProductId);
+	
+	/* confFactoryDefaultVersion */
+	SAVE_AND_COUNT(&confFactoryDefaultVersion);
+
+	/* confLicenseKey */
+	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++) {
+		SAVE_AND_COUNT(&confLicenseKey[i]);
+	}
+
+	/* confFunctions */
+	SAVE_AND_COUNT(&confFunctions.Seesaw);
+	SAVE_AND_COUNT(&confFunctions.ReferenceLine);
+	SAVE_AND_COUNT(&confFunctions.Curtain);
+
+	/* confColor */
+	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
+		SAVE_AND_COUNT(&confColor[i].Group);
+		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint1);
+		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint2);
+		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint3);
+		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint4);
+		SAVE_AND_COUNT(&confColor[i].CameraBackground);
+		SAVE_AND_COUNT(&confColor[i].ReferenceLine);
+		SAVE_AND_COUNT(&confColor[i].Restricted);
+	}
+
+	/* confCamera */
+	SAVE_AND_COUNT(&confCamera.Type);
+	SAVE_AND_COUNT(&confCamera.RGain);
+	SAVE_AND_COUNT(&confCamera.BGain);
+	SAVE_AND_COUNT(&confCamera.FirstLine);
+	SAVE_AND_COUNT(&confCamera.FirstPixel);
+	SAVE_AND_COUNT(&confCamera.UsableLines);
+	SAVE_AND_COUNT(&confCamera.UsablePixels);
+	SAVE_AND_COUNT(&confCamera.UsableRatio);
+	SAVE_AND_COUNT(&confCamera.Interface);
+	SAVE_AND_COUNT(&confCamera.NaturalColorShutterTime);
+	SAVE_AND_COUNT(&confCamera.NaturalColorBrightness);
+	SAVE_AND_COUNT(&confCamera.NaturalColorIris);
+	SAVE_AND_COUNT(&confCamera.NaturalColorExposureCompensation);
+	SAVE_AND_COUNT(&confCamera.NaturalColorGainPeak);
+	SAVE_AND_COUNT(&confCamera.ArtificialColorShutterTime);
+	SAVE_AND_COUNT(&confCamera.ArtificialColorBrightness);
+	SAVE_AND_COUNT(&confCamera.ArtificialColorIris);
+	SAVE_AND_COUNT(&confCamera.ArtificialColorExposureCompensation);
+	SAVE_AND_COUNT(&confCamera.ArtificialColorGainPeak);
+
+	/* confCameraMode */
+	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
+		SAVE_AND_COUNT(&confCameraMode[i].Zoom);
+		SAVE_AND_COUNT(&confCameraMode[i].ZoomMin);
+		SAVE_AND_COUNT(&confCameraMode[i].ZoomMax);
+		SAVE_AND_COUNT(&confCameraMode[i].ZoomSpeed);
+		SAVE_AND_COUNT(&confCameraMode[i].Focus);
+		SAVE_AND_COUNT(&confCameraMode[i].FocusRangeMin);
+		SAVE_AND_COUNT(&confCameraMode[i].FocusRangeMax);
+		SAVE_AND_COUNT(&confCameraMode[i].FocusSpeed);
+		SAVE_AND_COUNT(&confCameraMode[i].NaturalColorExposure);
+		SAVE_AND_COUNT(&confCameraMode[i].ArtificialColorExposure);
+		SAVE_AND_COUNT(&confCameraMode[i].WhiteBalance);
+	}
+
+	/* confMonitorMode */
+	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
+		SAVE_AND_COUNT(&confMonitorMode[i].ColorGainR);
+		SAVE_AND_COUNT(&confMonitorMode[i].ColorGainG);
+		SAVE_AND_COUNT(&confMonitorMode[i].ColorGainB);
+		SAVE_AND_COUNT(&confMonitorMode[i].Contrast);
+		SAVE_AND_COUNT(&confMonitorMode[i].Brightness);
+		SAVE_AND_COUNT(&confMonitorMode[i].Saturation);
+	}
+
+	/* confVideo */
+	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
+		SAVE_AND_COUNT(&confVideo[i].PaletteSelection);
+		SAVE_AND_COUNT(&confVideo[i].Type);
+		SAVE_AND_COUNT(&confVideo[i].LinesPerFrame);
+		SAVE_AND_COUNT(&confVideo[i].LinesActiveInCompletePicture);
+		SAVE_AND_COUNT(&confVideo[i].FirstActiveLine);
+		SAVE_AND_COUNT(&confVideo[i].HorizontalTotalLength);
+		SAVE_AND_COUNT(&confVideo[i].HorizontalSyncLength);
+		SAVE_AND_COUNT(&confVideo[i].HorizontalActiveVideoStart);
+		SAVE_AND_COUNT(&confVideo[i].HorizontalActiveVideoLength);
+		SAVE_AND_COUNT(&confVideo[i].VerticalSyncLength);
+		SAVE_AND_COUNT(&confVideo[i].VoltageDac);
+		SAVE_AND_COUNT(&confVideo[i].SyncRgb);
+		SAVE_AND_COUNT(&confVideo[i].AspectRatio);
+	}
+
+	/* confGraphics */
+	SAVE_AND_COUNT(&confGraphics.ReferenceLineWidth);
+	SAVE_AND_COUNT(&confGraphics.ReferenceLineLowSpeed);
+	SAVE_AND_COUNT(&confGraphics.ReferenceLineHighSpeed);
+	SAVE_AND_COUNT(&confGraphics.ReferenceLineHighSpeedDelay);
+	SAVE_AND_COUNT(&confGraphics.ReferenceLineSwitchDelay);
+	SAVE_AND_COUNT(&confGraphics.PosNegSpeed);
+
+	/* confPTZ */
+	SAVE_AND_COUNT(&confPTZ.LimitUp);
+	SAVE_AND_COUNT(&confPTZ.LimitDown);
+	SAVE_AND_COUNT(&confPTZ.LimitLeft);
+	SAVE_AND_COUNT(&confPTZ.LimitRight);
+	
+	/* confBattery */
+	SAVE_AND_COUNT(&confBattery.Type);
+	SAVE_AND_COUNT(&confBattery.NominalCapacity);
+	SAVE_AND_COUNT(&confBattery.TempCoefficientCapacity);	
+	SAVE_AND_COUNT(&confBattery.AgeCoefficientCapacity);
+	SAVE_AND_COUNT(&confBattery.LowCapacityLimit);
+	
+	/* confLighting */
+	SAVE_AND_COUNT(&confLighting.Intensity);
+
+	#undef SAVE_AND_COUNT
+
+	pr_info("[%s]: Save complete. %d parameters needed writing\n", __func__, total_written);
+	return total_written;
+}
+EXPORT_SYMBOL(ConfigParam_SaveAll);
