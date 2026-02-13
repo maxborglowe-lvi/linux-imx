@@ -290,9 +290,9 @@ static int mxc_isi_pipeline_enable(struct mxc_isi_cap_dev *isi_cap, bool enable)
 
 static int mxc_isi_update_buf_paddr(struct mxc_isi_buffer *buf, int memplanes)
 {
-	printk("[%s] call : lvicam", __func__);
+	// printk("[%s] call : lvicam", __func__);
 
-	printk("[%s] call : lvicam : memplanes = %d", __func__, memplanes);
+	// printk("[%s] call : lvicam : memplanes = %d", __func__, memplanes);
 
 	struct frame_addr *paddr = &buf->paddr;
 	struct vb2_buffer *vb2 = &buf->v4l2_buf.vb2_buf;
@@ -314,7 +314,7 @@ static int mxc_isi_update_buf_paddr(struct mxc_isi_buffer *buf, int memplanes)
 		paddr->y = vb2_dma_contig_plane_dma_addr(vb2, 0);
 		break;
 	default:
-		printk("[%s] call : lvicam : memplanes ERROR", __func__);
+		// printk("[%s] call : lvicam : memplanes ERROR", __func__);
 		return -EINVAL;
 	}
 
@@ -462,7 +462,7 @@ static void cap_vb2_buffer_queue(struct vb2_buffer *vb2)
 
 	spin_lock_irqsave(&isi_cap->slock, flags);
 
-	printk("[%s] call : lvicam : isi_cap->dst_f.fmt->mdataplanes = %d", __func__, isi_cap->dst_f.fmt->mdataplanes);
+	//printk("[%s] call : lvicam : isi_cap->dst_f.fmt->mdataplanes = %d", __func__, isi_cap->dst_f.fmt->mdataplanes);
 
 	mxc_isi_update_buf_paddr(buf, isi_cap->dst_f.fmt->mdataplanes);
 	list_add_tail(&buf->list, &isi_cap->out_pending);
@@ -1103,7 +1103,7 @@ static int mxc_isi_source_fmt_init(struct mxc_isi_cap_dev *isi_cap)
 	/* Pixel link master will transfer format to RGB32 or YUV32 */
 	src_f->fmt = mxc_isi_get_src_fmt(&src_fmt);
 
-	printk("[%s] call : lvicam : src_f->fmt->name = %s", __func__, src_f->fmt->name);
+	// printk("[%s] call : lvicam : src_f->fmt->name = %s", __func__, src_f->fmt->name);
 
 	set_frame_bounds(src_f, src_fmt.format.width, src_fmt.format.height);
 
@@ -1123,7 +1123,7 @@ static int mxc_isi_cap_s_fmt_mplane(struct file *file, void *priv,
 				    struct v4l2_format *f)
 {
 
-	printk("[%s] call : lvicam", __func__);
+	// printk("[%s] call : lvicam", __func__);
 
 	struct mxc_isi_cap_dev *isi_cap = video_drvdata(file);
 	struct v4l2_pix_format_mplane *pix = &f->fmt.pix_mp;
@@ -1145,7 +1145,7 @@ static int mxc_isi_cap_s_fmt_mplane(struct file *file, void *priv,
 	if (vb2_is_busy(&isi_cap->vb2_q))
 		return -EBUSY;
 
-	printk("[%s] call : lvicam : ARRAY_SIZE(mxc_isi_out_formats) = %d", __func__, ARRAY_SIZE(mxc_isi_out_formats));
+	// printk("[%s] call : lvicam : ARRAY_SIZE(mxc_isi_out_formats) = %d", __func__, ARRAY_SIZE(mxc_isi_out_formats));
 
 	/* Check out put format */
 	for (i = 0; i < ARRAY_SIZE(mxc_isi_out_formats); i++) {
@@ -1174,7 +1174,7 @@ static int mxc_isi_cap_s_fmt_mplane(struct file *file, void *priv,
 
 	pix->num_planes = fmt->memplanes;
 
-	printk("[%s] call : lvicam : fmt->memplanes = %d", __func__, fmt->memplanes);
+	// printk("[%s] call : lvicam : fmt->memplanes = %d", __func__, fmt->memplanes);
 	
 
 	for (i = 0; i < pix->num_planes; i++) {

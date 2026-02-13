@@ -26,10 +26,10 @@
 		};
 	};
 
-	lvigpio {
-		compatible = "lvi,lvigpio";
-		seesaw-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
-	};
+	// lvigpio {
+	// 	compatible = "lvi,lvigpio";
+	// 	seesaw-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
+	// };
 
 	reg_usdhc2_vmmc: regulator-usdhc2-vmmc {
 		compatible = "regulator-fixed";
@@ -126,7 +126,7 @@
 	lvipwm: lvipwm {
 		status = "okay";
 		compatible = "lvi,lvipwm";
-		pwms = <&pwm1 0 1000000 0>; // PWM controller, channel, period (ns), polarity
+		pwms = <&pwm1 0 255 0>; // PWM controller, channel, period, polarity
 	};
 };
 
@@ -316,6 +316,10 @@
 		power-gpios = <&pca6416 14 GPIO_ACTIVE_HIGH>; //used to power camera
 		onoff-gpios = <&gpio3 21 GPIO_ACTIVE_HIGH>; //power on/off control on FPGA
 
+		/* Interrupt configuration for seesaw GPIO */
+		interrupt-parent = <&gpio1>;
+		interrupts = <9 IRQ_TYPE_EDGE_BOTH>;
+
 		vcc-supply = <&tps55287_vcc>;
 
 		ports {
@@ -333,7 +337,7 @@
 				//Two lanes for colorbar
 				data-lanes = <1 2 3 4>;
 				//clock-noncontinuous;
-					clock-continuous;
+				clock-continuous;
 				//link-frequencies = /bits/ 64 <216000000>;
 				//link-frequencies = /bits/ 64 <297000000>;
 				link-frequencies = /bits/ 64 <594000000>;
