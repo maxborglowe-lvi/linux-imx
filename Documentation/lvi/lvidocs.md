@@ -1,5 +1,7 @@
 # LVI Kernel Modules Documentation
 
+# KERNEL BASED MODULES
+
 ## lviconfig_ctrl
 
 **File**: `lib/lviconfig/lviconfig_ctrl.c`
@@ -71,6 +73,16 @@ This example app `Documentation/lvi/examples/lvicam_userspace_app` shows how to 
 The `lvipanel.c` kernel driver is used to communicate with the LVI user panel.
 This module handles commands from the panel via i2c, which can then be used in user space to control a GUI, execute camera commands, etc.
 
+Referring to `drivers/input/misc/lvipanel_events.h`, **SYSTEM_EVENT_x** refers to events that are sent *to* the lvipanel, like lighting an LED, or setting boot states (important for keeping track of the iMX8 during boot). **PANEL_EVENT_X** refers to events that are sent *from* the lvipanel, like button presses, or encoder turns.
+
+Events can be transferred between the lvipanel driver and userspace.
+```c
+#define IOCTL_READ_DATA _IOR('i', 1, char)
+#define IOCTL_WRITE_DATA _IOW('i', 2, char)
+```
+
+
+
 ## lvirtc
 
 **File**: `drivers/rtc/lvirtc.c`
@@ -82,11 +94,13 @@ The RTC used is a PCF85063A chip connected via i2c.
 
 **File**: `drivers/pwm/lvipwm.c`
 
-`lvipwm` manages **PWM** which is used to control the dimming of the system's LEDs.
+`lvipwm` manages the voltage which is used to control the dimming of the system's LEDs. The only value that needs to be set is the *duty cycle*. This parameter ranges from 0-255 and can be set from user space using IOCTL:
 
-The module interfaces with the FPGA via **I2C** and sets PWM parameters (frequency, duty cycle) according to configuration values obtained from `lviconfig_ctrl`.
+```c
+#define PWM_IOCTL_SET_DUTY _IOW(PWM_MAGIC, 0, unsigned long)
+```
 
-This module enables dynamic and precise hardware control required for optimal LVI system performance.
+The initial duty cycle value is fetched from `lviconfig_parameters` by referring to the config parameter `confLighting`.
 
 ## Important files – Display pipeline
 

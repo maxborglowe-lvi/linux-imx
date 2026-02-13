@@ -42,6 +42,11 @@ config I2C_LVIBATTERY
     help
       This driver supports the LVIBATTERY.
 
+config I2C_LVICHARGER
+    tristate "LVICHARGER I2C driver"
+    depends on I2C
+    help
+      This driver supports the LVICHARGER.
 
 config CAT5157_DPOT
 	tristate "CAT5157 digital potentiometer driver"

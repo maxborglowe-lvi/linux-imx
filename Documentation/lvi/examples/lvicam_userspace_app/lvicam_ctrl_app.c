@@ -13,6 +13,8 @@
 #include <fcntl.h>
 #include <sys/wait.h> // for waitpid
 
+#include <syslog.h>
+
 #include "panel_events.h"
 
 // ===== LVIPANEL DEFINITIONS =====
@@ -46,22 +48,22 @@ static pid_t gstreamer_pid = -1;
  */
 static int data_write(uint8_t subreg, uint16_t data, size_t size)
 {
-    struct lvicam_i2c_cmd cmd = {
-        .subreg = subreg,
-        .data = data,
-        .size = size,
-    };
+	struct lvicam_i2c_cmd cmd = {
+		.subreg = subreg,
+		.data = data,
+		.size = size,
+	};
 
-    int ret = ioctl(fd, LVICAM_CTRL_IOCTL_WRITE_DATA, &cmd);
-    if (ret < 0)
-        perror("ioctl failed");
+	int ret = ioctl(fd, LVICAM_CTRL_IOCTL_WRITE_DATA, &cmd);
+	if (ret < 0)
+		perror("ioctl failed");
 
-    if (size == 1)
-        printf("Sent to subreg 0x%02X: data 0x%02X\n", subreg, data);
-    else if (size == 2)
-        printf("Sent to subreg 0x%02X: data 0x%04X\n", subreg, (uint16_t)data);
+	if (size == 1)
+		printf("Sent to subreg 0x%02X: data 0x%02X\n", subreg, data);
+	else if (size == 2)
+		printf("Sent to subreg 0x%02X: data 0x%04X\n", subreg, (uint16_t)data);
 
-    return ret;
+	return ret;
 }
 
 /** @brief read n bytes of data from an i2c subregister on the FPGA
@@ -72,39 +74,37 @@ static int data_write(uint8_t subreg, uint16_t data, size_t size)
  */
 static int data_read(uint8_t subreg, uint16_t *out_value, uint8_t size)
 {
-    struct lvicam_i2c_cmd cmd = {
-        .subreg = subreg,
-        .data = 0,
-        .size = size,
-    };
+	struct lvicam_i2c_cmd cmd = {
+		.subreg = subreg,
+		.data = 0,
+		.size = size,
+	};
 
-    int ret = ioctl(fd, LVICAM_CTRL_IOCTL_READ_DATA, &cmd);
-    if (ret < 0)
-    {
-        perror("ioctl read failed");
-        return ret;
-    }
+	int ret = ioctl(fd, LVICAM_CTRL_IOCTL_READ_DATA, &cmd);
+	if (ret < 0) {
+		perror("ioctl read failed");
+		return ret;
+	}
 
-    *out_value = cmd.data;
-    if (size == 1)
-        printf("Read from subreg 0x%02X: data 0x%02X\n", subreg, (uint8_t)cmd.data);
-    else
-        printf("Read from subreg 0x%02X: data 0x%04X\n", subreg, cmd.data);
+	*out_value = cmd.data;
+	if (size == 1)
+		printf("Read from subreg 0x%02X: data 0x%02X\n", subreg, (uint8_t)cmd.data);
+	else
+		printf("Read from subreg 0x%02X: data 0x%04X\n", subreg, cmd.data);
 
-    return 0;
+	return 0;
 }
 
 static int lvicam_read_seesaw(struct lvicam_seesaw_status *seesaw_status)
 {
-
-    int ret = ioctl(fd, LVICAM_CTRL_IOCTL_READ_SEESAW, seesaw_status);
-    if (ret < 0)
-    {
-        perror("ioctl LVICAM_CTRL_IOCTL_READ_SEESAW failed");
-        return ret;
-    }
-    printf("Seesaw status: %d\n", seesaw_status->value);
-    return 0;
+	int ret = ioctl(fd, LVICAM_CTRL_IOCTL_READ_SEESAW, seesaw_status);
+	if (ret < 0) {
+		perror("ioctl LVICAM_CTRL_IOCTL_READ_SEESAW failed");
+		return ret;
+	}
+	// printf("Seesaw status: %d\n", seesaw_status->value);
+	syslog(LOG_INFO, "Seesaw status: %d\n", seesaw_status->value);
+	return 0;
 }
 
 /* ########### SETTERS ############### */
@@ -114,8 +114,8 @@ static int lvicam_read_seesaw(struct lvicam_seesaw_status *seesaw_status)
  */
 int lvicam_zoom_in()
 {
-    int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ZOOM_CW, 1);
-    return ret;
+	int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ZOOM_CW, 1);
+	return ret;
 }
 
 /** @brief Decrement the zoom position command for the camera
@@ -123,8 +123,8 @@ int lvicam_zoom_in()
  */
 int lvicam_zoom_out()
 {
-    int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ZOOM_CCW, 1);
-    return ret;
+	int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ZOOM_CCW, 1);
+	return ret;
 }
 
 /** @brief Set the zoom step amount for the camera, i.e. how much the zoom position changes with each increment
@@ -133,8 +133,8 @@ int lvicam_zoom_out()
  */
 int lvicam_zoom_step_set(uint16_t step)
 {
-    int ret = data_write(CAM1_ZOOM_POS_INC_STEP_CONTROL_REG, step, 2);
-    return ret;
+	int ret = data_write(CAM1_ZOOM_POS_INC_STEP_CONTROL_REG, step, 2);
+	return ret;
 }
 
 /** @brief Reset the zoom position to the default value
@@ -142,9 +142,9 @@ int lvicam_zoom_step_set(uint16_t step)
  */
 int lvicam_zoom_reset()
 {
-    int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ZOOM_PUSH_DN, 1);
-    ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ZOOM_PUSH_UP, 1);
-    return ret;
+	int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ZOOM_PUSH_DN, 1);
+	ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ZOOM_PUSH_UP, 1);
+	return ret;
 }
 
 /** @brief Increment the natural color command for the camera (switches between natural and bw color)
@@ -152,9 +152,9 @@ int lvicam_zoom_reset()
  */
 int lvicam_natcol_next()
 {
-    int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_NATCOL_DN, 1);
-    ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_NATCOL_UP, 1);
-    return ret;
+	int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_NATCOL_DN, 1);
+	ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_NATCOL_UP, 1);
+	return ret;
 }
 
 /** @brief Increment the artificial color command for the camera
@@ -162,9 +162,9 @@ int lvicam_natcol_next()
  */
 int lvicam_artcol_next()
 {
-    int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ARTCOL_DN, 1);
-    ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ARTCOL_UP, 1);
-    return ret;
+	int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ARTCOL_DN, 1);
+	ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_ARTCOL_UP, 1);
+	return ret;
 }
 
 /** @brief Scroll up in the list of functions for the camera
@@ -172,8 +172,8 @@ int lvicam_artcol_next()
  */
 int lvicam_function_scroll_up()
 {
-    int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_FUNCTION_CW, 1);
-    return ret;
+	int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_FUNCTION_CW, 1);
+	return ret;
 }
 
 /** @brief Scroll down in the list of functions for the camera
@@ -181,8 +181,8 @@ int lvicam_function_scroll_up()
  */
 int lvicam_function_scroll_down()
 {
-    int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_FUNCTION_CCW, 1);
-    return ret;
+	int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_FUNCTION_CCW, 1);
+	return ret;
 }
 
 /** @brief Increment the currently used function in the list of functions for the camera
@@ -190,16 +190,16 @@ int lvicam_function_scroll_down()
  */
 int lvicam_function_next()
 {
-    int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_FUNCTION_BTN_DN, 1);
-    ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_FUNCTION_BTN_UP, 1);
-    return ret;
+	int ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_FUNCTION_BTN_DN, 1);
+	ret = data_write(USER_PANEL1_CMD_CONTROL_REG, CMD_FUNCTION_BTN_UP, 1);
+	return ret;
 }
 
 int lvicam_set_camera_id()
 {
-    int ret;
-    ret = data_write(CAM_ID_STATUS_REG, camera_id, 2);
-    return ret;
+	int ret;
+	ret = data_write(CAM_ID_STATUS_REG, camera_id, 2);
+	return ret;
 }
 
 /* ########### GETTERS ############### */
@@ -208,29 +208,29 @@ int lvicam_set_camera_id()
 /** @brief  */
 int lvicam_get_fpga_status()
 {
-    int ret;
-    ret = data_read(FPGA_FLAGS_INIT_STATUS_REG, &fpga_status, 1);
-    printf("FPGA status: %u\n", fpga_status);
+	int ret;
+	ret = data_read(FPGA_FLAGS_INIT_STATUS_REG, &fpga_status, 1);
+	printf("FPGA status: %u\n", fpga_status);
 
-    return ret;
+	return ret;
 }
 
 int lvicam_get_camera_id()
 {
-    int ret;
-    ret = data_read(CAM_ID_STATUS_REG, &camera_id, 2);
-    printf("Camera ID: %u\n", camera_id);
+	int ret;
+	ret = data_read(CAM_ID_STATUS_REG, &camera_id, 2);
+	printf("Camera ID: %u\n", camera_id);
 
-    return ret;
+	return ret;
 }
 
 int lvicam_get_camera1_zoom_pos_status()
 {
-    int ret;
-    ret = data_read(CAM1_ZOOM_POS_STATUS_REG, &camera1_zoom_pos, 2);
-    printf("Camera1 zoom position: %u\n", camera1_zoom_pos);
+	int ret;
+	ret = data_read(CAM1_ZOOM_POS_STATUS_REG, &camera1_zoom_pos, 2);
+	printf("Camera1 zoom position: %u\n", camera1_zoom_pos);
 
-    return ret;
+	return ret;
 }
 
 /* ########### GSTREAMER CONTROL ############### */
@@ -239,146 +239,129 @@ int lvicam_get_camera1_zoom_pos_status()
  */
 void gstreamer_start()
 {
-    if (gstreamer_pid > 0)
-    {
-        printf("GStreamer already running with PID: %d\n", gstreamer_pid);
-        return;
-    }
+	if (gstreamer_pid > 0) {
+		printf("GStreamer already running with PID: %d\n", gstreamer_pid);
+		return;
+	}
 
-    gstreamer_pid = fork();
+	gstreamer_pid = fork();
 
-    if (gstreamer_pid == 0)
-    {
-        // Child process - execute GStreamer command
-        printf("Starting GStreamer pipeline...\n");
-        execlp("gst-launch-1.0", "gst-launch-1.0",
-               "v4l2src", "device=/dev/video1", "!",
-               "video/x-raw,width=1920,height=1080,format=NV12", "!",
-               "waylandsink",
-               NULL);
+	if (gstreamer_pid == 0) {
+		// Child process - execute GStreamer command
+		printf("Starting GStreamer pipeline...\n");
+		execlp("gst-launch-1.0", "gst-launch-1.0", "v4l2src", "device=/dev/video1", "io-mode=4", "!", "video/x-raw,width=1920,height=1080,format=NV12,framerate=60/1", "!", "waylandsink",
+		       "sync=false", "async=false", NULL);
 
-        // If execlp fails
-        perror("Failed to execute gst-launch-1.0");
-        exit(EXIT_FAILURE);
-    }
-    else if (gstreamer_pid > 0)
-    {
-        // Parent process
-        printf("GStreamer started with PID: %d\n", gstreamer_pid);
-    }
-    else
-    {
-        perror("Failed to fork for GStreamer");
-        gstreamer_pid = -1;
-    }
+		// If execlp fails
+		perror("Failed to execute gst-launch-1.0");
+		exit(EXIT_FAILURE);
+	} else if (gstreamer_pid > 0) {
+		// Parent process
+		printf("GStreamer started with PID: %d\n", gstreamer_pid);
+	} else {
+		perror("Failed to fork for GStreamer");
+		gstreamer_pid = -1;
+	}
 }
 
 /** @brief Stop GStreamer video pipeline
  */
 void gstreamer_stop()
 {
-    if (gstreamer_pid <= 0)
-    {
-        printf("GStreamer is not running\n");
-        return;
-    }
+	if (gstreamer_pid <= 0) {
+		printf("GStreamer is not running\n");
+		return;
+	}
 
-    printf("Stopping GStreamer (PID: %d)...\n", gstreamer_pid);
+	printf("Stopping GStreamer (PID: %d)...\n", gstreamer_pid);
 
-    // Send SIGTERM for graceful shutdown
-    if (kill(gstreamer_pid, SIGTERM) == 0)
-    {
-        // Wait for process to terminate
-        int status;
-        waitpid(gstreamer_pid, &status, 0);
-        printf("GStreamer stopped\n");
-        gstreamer_pid = -1;
-    }
-    else
-    {
-        perror("Failed to stop GStreamer");
-    }
+	// Send SIGTERM for graceful shutdown
+	if (kill(gstreamer_pid, SIGTERM) == 0) {
+		// Wait for process to terminate
+		int status;
+		waitpid(gstreamer_pid, &status, 0);
+		printf("GStreamer stopped\n");
+		gstreamer_pid = -1;
+	} else {
+		perror("Failed to stop GStreamer");
+	}
 }
 
 /** @brief Toggle GStreamer video pipeline on/off
  */
 void gstreamer_toggle()
 {
-    if (gstreamer_pid > 0)
-    {
-        printf("Toggling GStreamer OFF\n");
-        gstreamer_stop();
-    }
-    else
-    {
-        printf("Toggling GStreamer ON\n");
-        gstreamer_start();
-    }
+	if (gstreamer_pid > 0) {
+		printf("Toggling GStreamer OFF\n");
+		gstreamer_stop();
+	} else {
+		printf("Toggling GStreamer ON\n");
+		gstreamer_start();
+	}
 }
 
 /* ########### PANEL EVENT FUNCTIONS ############### */
 
 const char *panel_event_to_string(char event)
 {
-    switch (event)
-    {
-    case PANEL_EVENT_IDLE:
-        return "PANEL_EVENT_IDLE";
-    case PANEL_EVENT_ONOFF_PRESS:
-        return "PANEL_EVENT_ONOFF_PRESS";
-    case PANEL_EVENT_ONOFF_PRESS_HOLD:
-        return "PANEL_EVENT_ONOFF_PRESS_HOLD";
-    case PANEL_EVENT_ONOFF_PRESS_DOUBLE:
-        return "PANEL_EVENT_ONOFF_PRESS_DOUBLE";
-    case PANEL_EVENT_ONOFF_RELEASE:
-        return "PANEL_EVENT_ONOFF_RELEASE";
-    case PANEL_EVENT_FUNCTION_PRESS:
-        return "PANEL_EVENT_FUNCTION_PRESS";
-    case PANEL_EVENT_FUNCTION_PRESS_DOUBLE:
-        return "PANEL_EVENT_FUNCTION_PRESS_DOUBLE";
-    case PANEL_EVENT_FUNCTION_PRESS_HOLD:
-        return "PANEL_EVENT_FUNCTION_PRESS_HOLD";
-    case PANEL_EVENT_FUNCTION_RELEASE:
-        return "PANEL_EVENT_FUNCTION_RELEASE";
-    case PANEL_EVENT_FUNCTION_CW:
-        return "PANEL_EVENT_FUNCTION_CW";
-    case PANEL_EVENT_FUNCTION_CCW:
-        return "PANEL_EVENT_FUNCTION_CCW";
-    case PANEL_EVENT_COLOR_ARTIFICIAL_PRESS:
-        return "PANEL_EVENT_COLOR_ARTIFICIAL_PRESS";
-    case PANEL_EVENT_COLOR_ARTIFICIAL_PRESS_DOUBLE:
-        return "PANEL_EVENT_COLOR_ARTIFICIAL_PRESS_DOUBLE";
-    case PANEL_EVENT_COLOR_ARTIFICIAL_PRESS_HOLD:
-        return "PANEL_EVENT_COLOR_ARTIFICIAL_PRESS_HOLD";
-    case PANEL_EVENT_COLOR_ARTIFICIAL_RELEASE:
-        return "PANEL_EVENT_COLOR_ARTIFICIAL_RELEASE";
-    case PANEL_EVENT_COLOR_NATURAL_PRESS:
-        return "PANEL_EVENT_COLOR_NATURAL_PRESS";
-    case PANEL_EVENT_COLOR_NATURAL_PRESS_DOUBLE:
-        return "PANEL_EVENT_COLOR_NATURAL_PRESS_DOUBLE";
-    case PANEL_EVENT_COLOR_NATURAL_PRESS_HOLD:
-        return "PANEL_EVENT_COLOR_NATURAL_PRESS_HOLD";
-    case PANEL_EVENT_COLOR_NATURAL_RELEASE:
-        return "PANEL_EVENT_COLOR_NATURAL_RELEASE";
-    case PANEL_EVENT_ZOOM_PRESS:
-        return "PANEL_EVENT_ZOOM_PRESS";
-    case PANEL_EVENT_ZOOM_PRESS_DOUBLE:
-        return "PANEL_EVENT_ZOOM_PRESS_DOUBLE";
-    case PANEL_EVENT_ZOOM_PRESS_HOLD:
-        return "PANEL_EVENT_ZOOM_PRESS_HOLD";
-    case PANEL_EVENT_ZOOM_RELEASE:
-        return "PANEL_EVENT_ZOOM_RELEASE";
-    case PANEL_EVENT_ZOOM_CW:
-        return "PANEL_EVENT_ZOOM_CW";
-    case PANEL_EVENT_ZOOM_CCW:
-        return "PANEL_EVENT_ZOOM_CCW";
-    case PANEL_EVENT_SYSTEM_BOOT:
-        return "PANEL_EVENT_SYSTEM_BOOT";
-    case PANEL_EVENT_SYSTEM_SHUTDOWN:
-        return "PANEL_EVENT_SYSTEM_SHUTDOWN";
-    default:
-        return "UNKNOWN_EVENT";
-    }
+	switch (event) {
+	case PANEL_EVENT_IDLE:
+		return "PANEL_EVENT_IDLE";
+	case PANEL_EVENT_ONOFF_PRESS:
+		return "PANEL_EVENT_ONOFF_PRESS";
+	case PANEL_EVENT_ONOFF_PRESS_HOLD:
+		return "PANEL_EVENT_ONOFF_PRESS_HOLD";
+	case PANEL_EVENT_ONOFF_PRESS_DOUBLE:
+		return "PANEL_EVENT_ONOFF_PRESS_DOUBLE";
+	case PANEL_EVENT_ONOFF_RELEASE:
+		return "PANEL_EVENT_ONOFF_RELEASE";
+	case PANEL_EVENT_FUNCTION_PRESS:
+		return "PANEL_EVENT_FUNCTION_PRESS";
+	case PANEL_EVENT_FUNCTION_PRESS_DOUBLE:
+		return "PANEL_EVENT_FUNCTION_PRESS_DOUBLE";
+	case PANEL_EVENT_FUNCTION_PRESS_HOLD:
+		return "PANEL_EVENT_FUNCTION_PRESS_HOLD";
+	case PANEL_EVENT_FUNCTION_RELEASE:
+		return "PANEL_EVENT_FUNCTION_RELEASE";
+	case PANEL_EVENT_FUNCTION_CW:
+		return "PANEL_EVENT_FUNCTION_CW";
+	case PANEL_EVENT_FUNCTION_CCW:
+		return "PANEL_EVENT_FUNCTION_CCW";
+	case PANEL_EVENT_COLOR_ARTIFICIAL_PRESS:
+		return "PANEL_EVENT_COLOR_ARTIFICIAL_PRESS";
+	case PANEL_EVENT_COLOR_ARTIFICIAL_PRESS_DOUBLE:
+		return "PANEL_EVENT_COLOR_ARTIFICIAL_PRESS_DOUBLE";
+	case PANEL_EVENT_COLOR_ARTIFICIAL_PRESS_HOLD:
+		return "PANEL_EVENT_COLOR_ARTIFICIAL_PRESS_HOLD";
+	case PANEL_EVENT_COLOR_ARTIFICIAL_RELEASE:
+		return "PANEL_EVENT_COLOR_ARTIFICIAL_RELEASE";
+	case PANEL_EVENT_COLOR_NATURAL_PRESS:
+		return "PANEL_EVENT_COLOR_NATURAL_PRESS";
+	case PANEL_EVENT_COLOR_NATURAL_PRESS_DOUBLE:
+		return "PANEL_EVENT_COLOR_NATURAL_PRESS_DOUBLE";
+	case PANEL_EVENT_COLOR_NATURAL_PRESS_HOLD:
+		return "PANEL_EVENT_COLOR_NATURAL_PRESS_HOLD";
+	case PANEL_EVENT_COLOR_NATURAL_RELEASE:
+		return "PANEL_EVENT_COLOR_NATURAL_RELEASE";
+	case PANEL_EVENT_ZOOM_PRESS:
+		return "PANEL_EVENT_ZOOM_PRESS";
+	case PANEL_EVENT_ZOOM_PRESS_DOUBLE:
+		return "PANEL_EVENT_ZOOM_PRESS_DOUBLE";
+	case PANEL_EVENT_ZOOM_PRESS_HOLD:
+		return "PANEL_EVENT_ZOOM_PRESS_HOLD";
+	case PANEL_EVENT_ZOOM_RELEASE:
+		return "PANEL_EVENT_ZOOM_RELEASE";
+	case PANEL_EVENT_ZOOM_CW:
+		return "PANEL_EVENT_ZOOM_CW";
+	case PANEL_EVENT_ZOOM_CCW:
+		return "PANEL_EVENT_ZOOM_CCW";
+	case PANEL_EVENT_SYSTEM_BOOT:
+		return "PANEL_EVENT_SYSTEM_BOOT";
+	case PANEL_EVENT_SYSTEM_SHUTDOWN:
+		return "PANEL_EVENT_SYSTEM_SHUTDOWN";
+	default:
+		return "UNKNOWN_EVENT";
+	}
 }
 
 /** @brief Read panel event data from lvipanel device
@@ -386,13 +369,12 @@ const char *panel_event_to_string(char event)
  */
 int panel_read_event()
 {
-    if (ioctl(panel_fd, IOCTL_READ_DATA, &panel_event) < 0)
-    {
-        perror("Failed to read panel data");
-        return -1;
-    }
-    printf("Panel event received: 0x%02X (%s)\n", (unsigned char)panel_event, panel_event_to_string(panel_event));
-    return 0;
+	if (ioctl(panel_fd, IOCTL_READ_DATA, &panel_event) < 0) {
+		perror("Failed to read panel data");
+		return -1;
+	}
+	printf("Panel event received: 0x%02X (%s)\n", (unsigned char)panel_event, panel_event_to_string(panel_event));
+	return 0;
 }
 
 /** @brief Write system event to lvipanel device
@@ -401,90 +383,87 @@ int panel_read_event()
  */
 int panel_write_event(char data)
 {
-    if (ioctl(panel_fd, IOCTL_WRITE_DATA, &data) < 0)
-    {
-        perror("Failed to write panel data");
-        return -1;
-    }
-    return 0;
+	if (ioctl(panel_fd, IOCTL_WRITE_DATA, &data) < 0) {
+		perror("Failed to write panel data");
+		return -1;
+	}
+	return 0;
 }
 
 /** @brief Handle panel events and translate to FPGA commands
  */
 void handle_panel_event()
 {
-    int ret = 0;
+	int ret = 0;
 
-    switch (panel_event)
-    {
-    /* ===== ZOOM CONTROL ===== */
-    case PANEL_EVENT_ZOOM_CW:
-        printf("Panel: Zoom CW -> FPGA: Zoom In\n");
-        ret = lvicam_zoom_in();
-        break;
+	switch (panel_event) {
+	/* ===== ZOOM CONTROL ===== */
+	case PANEL_EVENT_ZOOM_CW:
+		printf("Panel: Zoom CW -> FPGA: Zoom In\n");
+		ret = lvicam_zoom_in();
+		break;
 
-    case PANEL_EVENT_ZOOM_CCW:
-        printf("Panel: Zoom CCW -> FPGA: Zoom Out\n");
-        ret = lvicam_zoom_out();
-        break;
+	case PANEL_EVENT_ZOOM_CCW:
+		printf("Panel: Zoom CCW -> FPGA: Zoom Out\n");
+		ret = lvicam_zoom_out();
+		break;
 
-    case PANEL_EVENT_ZOOM_PRESS:
-        printf("Panel: Zoom Press -> FPGA: Reset Zoom\n");
-        ret = lvicam_zoom_reset();
-        break;
+	case PANEL_EVENT_ZOOM_PRESS:
+		printf("Panel: Zoom Press -> FPGA: Reset Zoom\n");
+		ret = lvicam_zoom_reset();
+		break;
 
-    case PANEL_EVENT_ZOOM_PRESS_DOUBLE:
-        printf("Panel: Zoom Double Press -> FPGA: Query Zoom Position\n");
-        ret = lvicam_get_camera1_zoom_pos_status();
-        break;
+	case PANEL_EVENT_ZOOM_PRESS_DOUBLE:
+		printf("Panel: Zoom Double Press -> FPGA: Query Zoom Position\n");
+		ret = lvicam_get_camera1_zoom_pos_status();
+		break;
 
-    /* ===== COLOR CONTROL ===== */
-    case PANEL_EVENT_COLOR_NATURAL_PRESS:
-        printf("Panel: Natural Color Press -> FPGA: Next Natural Color\n");
-        ret = lvicam_natcol_next();
-        break;
+	/* ===== COLOR CONTROL ===== */
+	case PANEL_EVENT_COLOR_NATURAL_PRESS:
+		printf("Panel: Natural Color Press -> FPGA: Next Natural Color\n");
+		ret = lvicam_natcol_next();
+		break;
 
-    case PANEL_EVENT_COLOR_ARTIFICIAL_PRESS:
-        printf("Panel: Artificial Color Press -> FPGA: Next Artificial Color\n");
-        ret = lvicam_artcol_next();
-        break;
+	case PANEL_EVENT_COLOR_ARTIFICIAL_PRESS:
+		printf("Panel: Artificial Color Press -> FPGA: Next Artificial Color\n");
+		ret = lvicam_artcol_next();
+		break;
 
-    /* ===== FUNCTION CONTROL ===== */
-    case PANEL_EVENT_FUNCTION_CW:
-        printf("Panel: Function CW -> FPGA: Function Scroll Up\n");
-        ret = lvicam_function_scroll_up();
-        break;
+	/* ===== FUNCTION CONTROL ===== */
+	case PANEL_EVENT_FUNCTION_CW:
+		printf("Panel: Function CW -> FPGA: Function Scroll Up\n");
+		ret = lvicam_function_scroll_up();
+		break;
 
-    case PANEL_EVENT_FUNCTION_CCW:
-        printf("Panel: Function CCW -> FPGA: Function Scroll Down\n");
-        ret = lvicam_function_scroll_down();
-        break;
+	case PANEL_EVENT_FUNCTION_CCW:
+		printf("Panel: Function CCW -> FPGA: Function Scroll Down\n");
+		ret = lvicam_function_scroll_down();
+		break;
 
-    case PANEL_EVENT_FUNCTION_PRESS:
-        printf("Panel: Function Press -> Toggle GStreamer\n");
-        gstreamer_toggle();
-        break;
+	case PANEL_EVENT_FUNCTION_PRESS:
+		printf("Panel: Function Press -> Toggle GStreamer\n");
+		gstreamer_toggle();
+		break;
 
-    case PANEL_EVENT_FUNCTION_PRESS_DOUBLE:
-        printf("Panel: Function Double Press -> FPGA: Function Next\n");
-        ret = lvicam_function_next();
-        break;
+	case PANEL_EVENT_FUNCTION_PRESS_DOUBLE:
+		printf("Panel: Function Double Press -> FPGA: Function Next\n");
+		ret = lvicam_function_next();
+		break;
 
-    /* ===== IDLE - NO ACTION ===== */
-    case PANEL_EVENT_IDLE:
-        // No action for idle
-        break;
+	/* ===== IDLE - NO ACTION ===== */
+	case PANEL_EVENT_IDLE:
+		// No action for idle
+		break;
 
-    /* ===== UNHANDLED EVENTS ===== */
-    default:
-        printf("Unhandled panel event: %s\n", panel_event_to_string(panel_event));
-        break;
-    }
+	/* ===== UNHANDLED EVENTS ===== */
+	default:
+		printf("Unhandled panel event: %s\n", panel_event_to_string(panel_event));
+		break;
+	}
 
-    if (ret < 0)
-    {
-        printf("Error executing FPGA command for event: %s\n", panel_event_to_string(panel_event));
-    }
+	if (ret < 0) {
+		printf("Error executing FPGA command for event: %s\n", panel_event_to_string(panel_event));
+	}
 }
 
 /** @brief This function is called when the camera "seesaw" interrupt is triggered.
@@ -493,22 +472,27 @@ void handle_panel_event()
  */
 void lvicam_interrupt_handler(int signum)
 {
-    if (signum == SIGIO)
-    {
-        // When the seesaw interrupt is triggered, read the current GPIO value
-        struct lvicam_seesaw_status seesaw_status;
-        lvicam_read_seesaw(&seesaw_status);
+	if (signum == SIGIO) {
+		static int last_value = -1;
 
-        if (seesaw_status.value)
-        {
-            printf("Seesaw interrupt: Resetting zoom\n");
-            lvicam_zoom_reset();
-        }
-    }
-    else
-    {
-        printf("Received unexpected signal %d\n", signum);
-    }
+		struct lvicam_seesaw_status seesaw_status;
+		lvicam_read_seesaw(&seesaw_status);
+
+		// Only act when GPIO goes from HIGH to LOW (falling edge)
+		if (last_value == 1 && seesaw_status.value == 0) {
+			syslog(LOG_INFO, "Seesaw interrupt: GPIO went LOW, resetting zoom");
+			lvicam_zoom_reset();
+		}
+		// Or only when it goes LOW to HIGH (rising edge)
+		else if (last_value == 0 && seesaw_status.value == 1) {
+			syslog(LOG_INFO, "Seesaw interrupt: GPIO went HIGH, resetting zoom");
+			lvicam_zoom_reset();
+		}
+
+		last_value = seesaw_status.value;
+	} else {
+		printf("Received unexpected signal %d\n", signum);
+	}
 }
 
 /** @brief Signal handler for panel events
@@ -516,105 +500,104 @@ void lvicam_interrupt_handler(int signum)
  */
 void panel_signal_handler(int signum)
 {
-    if (signum == DATA_AVAILABLE_SIGNAL)
-    {
-        // Panel has new data available
-        if (panel_read_event() == 0)
-        {
-            handle_panel_event();
-        }
-    }
-    else if (signum == SIGINT)
-    {
-        printf("\nReceived SIGINT, exiting...\n");
-        keep_running = 0;
-    }
+	if (signum == DATA_AVAILABLE_SIGNAL) {
+		// Panel has new data available
+		if (panel_read_event() == 0) {
+			handle_panel_event();
+		}
+	} else if (signum == SIGINT) {
+		printf("\nReceived SIGINT, exiting...\n");
+		keep_running = 0;
+	}
 }
 
 void print_help()
 {
-    printf("\n=== LVICAM Panel-Controlled Application ===\n");
-    printf("This application receives events from the LVI panel and\n");
-    printf("translates them to FPGA commands.\n\n");
-    printf("Panel Event Mappings:\n");
-    printf("  Zoom CW/CCW           -> FPGA Zoom In/Out\n");
-    printf("  Zoom Press            -> Reset Zoom\n");
-    printf("  Zoom Double Press     -> Query Zoom Position\n");
-    printf("  Natural Color Press   -> Cycle Natural Color\n");
-    printf("  Artificial Color      -> Cycle Artificial Color\n");
-    printf("  Function CW/CCW       -> Scroll Functions\n");
-    printf("  Function Press        -> Toggle GStreamer Video\n");
-    printf("  Function Double Press -> Execute Function\n");
-    printf("\nPress Ctrl+C to exit\n");
-    printf("============================================\n\n");
+	printf("\n=== LVICAM Panel-Controlled Application ===\n");
+	printf("This application receives events from the LVI panel and\n");
+	printf("translates them to FPGA commands.\n\n");
+	printf("Panel Event Mappings:\n");
+	printf("  Zoom CW/CCW           -> FPGA Zoom In/Out\n");
+	printf("  Zoom Press            -> Reset Zoom\n");
+	printf("  Zoom Double Press     -> Query Zoom Position\n");
+	printf("  Natural Color Press   -> Cycle Natural Color\n");
+	printf("  Artificial Color      -> Cycle Artificial Color\n");
+	printf("  Function CW/CCW       -> Scroll Functions\n");
+	printf("  Function Press        -> Toggle GStreamer Video\n");
+	printf("  Function Double Press -> Execute Function\n");
+	printf("\nPress Ctrl+C to exit\n");
+	printf("============================================\n\n");
 }
 
 int main()
 {
-    printf("=== LVICAM Panel Control Application ===\n");
+	openlog("lvicam_ctrl_app", LOG_PID | LOG_CONS | LOG_PERROR, LOG_USER);
+	syslog(LOG_INFO, "LVICAM Control Application Started");
 
-    // Open lvicam device
-    fd = open("/dev/lvicam", O_RDWR);
-    if (fd < 0)
-    {
-        perror("Failed to open /dev/lvicam");
-        return 1;
-    }
-    printf("Opened /dev/lvicam successfully\n");
+	printf("=== LVICAM Panel Control Application ===\n");
 
-    // Set up seesaw interrupt handling for lvicam
-    fcntl(fd, F_SETOWN, getpid());
-    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_ASYNC);
-    signal(SIGIO, lvicam_interrupt_handler);
+	// Open lvicam device
+	fd = open("/dev/lvicam", O_RDWR);
+	if (fd < 0) {
+		perror("Failed to open /dev/lvicam");
+		return 1;
+	}
+	printf("Opened /dev/lvicam successfully\n");
 
-    // Open lvipanel device
-    panel_fd = open(DEVICE_NAME, O_RDWR);
-    if (panel_fd < 0)
-    {
-        perror("Failed to open /dev/lvipanel");
-        close(fd);
-        return 1;
-    }
-    printf("Opened /dev/lvipanel successfully\n");
+	// Set up seesaw interrupt handling for lvicam
+	fcntl(fd, F_SETOWN, getpid());
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_ASYNC);
+	signal(SIGIO, lvicam_interrupt_handler);
 
-    // Register signal handlers
-    signal(DATA_AVAILABLE_SIGNAL, panel_signal_handler);
-    signal(SIGINT, panel_signal_handler);
+	// Open lvipanel device
+	panel_fd = open(DEVICE_NAME, O_RDWR);
+	if (panel_fd < 0) {
+		perror("Failed to open /dev/lvipanel");
+		close(fd);
+		return 1;
+	}
+	printf("Opened /dev/lvipanel successfully\n");
 
-    // Write initial system event to panel (turn on light)
-    panel_write_event(SYSTEM_EVENT_ON);
+	// Register signal handlers
+	signal(DATA_AVAILABLE_SIGNAL, panel_signal_handler);
+	signal(SIGINT, panel_signal_handler);
 
-    print_help();
+	// Write initial system event to panel (turn on light)
+	panel_write_event(SYSTEM_EVENT_ON);
 
-    // Set initial zoom step
-    lvicam_zoom_step_set(10);
+	print_help();
 
-    // Optional: Query initial status
-    // lvicam_get_fpga_status();
-    // lvicam_get_camera_id();
-    // lvicam_get_camera1_zoom_pos_status();
+	// Set initial zoom step
+	lvicam_zoom_step_set(127);
 
-    printf("Waiting for panel events...\n");
+	lvicam_get_fpga_status();
+	lvicam_get_camera_id();
+	lvicam_get_camera1_zoom_pos_status();
 
-    // Main loop - wait for signals
-    while (keep_running)
-    {
-        pause(); // Wait for signals (panel events or SIGINT)
-    }
+	// Optional: Query initial status
+	// lvicam_get_fpga_status();
+	// lvicam_get_camera_id();
+	// lvicam_get_camera1_zoom_pos_status();
 
-    // Cleanup
-    printf("Cleaning up...\n");
+	printf("Waiting for panel events...\n");
 
-    // Stop GStreamer if running
-    if (gstreamer_pid > 0)
-    {
-        gstreamer_stop();
-    }
+	// Main loop - wait for signals
+	while (keep_running) {
+		pause(); // Wait for signals (panel events or SIGINT)
+	}
 
-    panel_write_event(SYSTEM_EVENT_LIGHT_OFF);
-    close(panel_fd);
-    close(fd);
-    printf("Exited cleanly\n");
+	// Cleanup
+	printf("Cleaning up...\n");
 
-    return 0;
+	// Stop GStreamer if running
+	if (gstreamer_pid > 0) {
+		gstreamer_stop();
+	}
+
+	panel_write_event(SYSTEM_EVENT_LIGHT_OFF);
+	close(panel_fd);
+	close(fd);
+	printf("Exited cleanly\n");
+
+	return 0;
 }
