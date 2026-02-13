@@ -35,6 +35,7 @@ struct lviconfig_mediator {
 #define IOCTL_SET_CONFIG_PARAM _IOW('C', 3, struct lviconfig_mediator)
 #define IOCTL_GET_CONFIG_PARAM _IOR('C', 4, struct lviconfig_mediator)
 #define IOCTL_SET_CONFIG_PARAM_EEPROM _IOW('C', 5, struct lviconfig_mediator)
+#define IOCTL_SAVE_ALL_CONFIG_PARAMS _IO('C', 6)
 
 static int major;
 static struct i2c_client *i2c_client_g;
@@ -178,6 +179,19 @@ static long lviconfig_ioctl(struct file *file, unsigned int cmd, unsigned long a
 
 	struct lviconfig_mediator mediator; /**< Mediator structure for config parameters */
 
+	/* Handle commands that don't need mediator data first */
+	if (cmd == IOCTL_SAVE_ALL_CONFIG_PARAMS) {
+		pr_info("[lviconfig] SAVE_ALL_CONFIG_PARAMS\n");
+		ret = ConfigParam_SaveAll();
+		if (ret < 0) {
+			pr_err("[lviconfig] SAVE_ALL_CONFIG_PARAMS failed: %d\n", ret);
+			return ret;
+		}
+		pr_info("[lviconfig] SAVE_ALL_CONFIG_PARAMS complete: %d params written\n", ret);
+		return 0;
+	}
+
+	/* For other commands, copy mediator from user space */
 	if (copy_from_user(&mediator, (struct lviconfig_mediator *)arg, sizeof(struct lviconfig_mediator))) {
 		return -EFAULT;
 	}
@@ -190,16 +204,22 @@ static long lviconfig_ioctl(struct file *file, unsigned int cmd, unsigned long a
 		if (mediator.data == NULL) {
 			return -EINVAL; // Invalid data pointer
 		}
-		pr_info("[%s]: called with param_string: %s\n", __func__, mediator.param_string);
 
 		param = ConfigParam_FindByName(mediator.param_string);
 
-		param->data = mediator.data; // Set the data pointer for the parameter
-
 		if (!param) {
-			pr_err("[%s]: Parameter not found: %s\n", __func__, mediator.param_string);
+			pr_err("[lviconfig] SET_CONFIG_PARAM: param '%s' not found\n", mediator.param_string);
 			return -ENOENT; // Parameter not found
 		}
+
+		/* Copy data from user space into kernel param->data buffer */
+		if (copy_from_user(param->data, mediator.data, param->size)) {
+			pr_err("[lviconfig] SET_CONFIG_PARAM: copy_from_user failed for '%s'\n", mediator.param_string);
+			return -EFAULT;
+		}
+
+		pr_info("[lviconfig] SET_CONFIG_PARAM: %-40s addr=0x%04X size=%u\n",
+			mediator.param_string, param->address, param->size);
 
 		break;
 	case IOCTL_SET_CONFIG_PARAM_EEPROM:
@@ -209,16 +229,18 @@ static long lviconfig_ioctl(struct file *file, unsigned int cmd, unsigned long a
 		if (mediator.data == NULL) {
 			return -EINVAL; // Invalid data pointer
 		}
-		pr_info("[%s]: called with param_string: %s\n", __func__, mediator.param_string);
 
 		param = ConfigParam_FindByName(mediator.param_string);
 
 		if (!param) {
-			pr_err("[%s]: Parameter not found: %s\n", __func__, mediator.param_string);
+			pr_err("[lviconfig] SET_CONFIG_PARAM_EEPROM: param '%s' not found\n", mediator.param_string);
 			return -ENOENT; // Parameter not found
 		}
 
 		ConfigParam_SetData(param, mediator.data); // Set the data for the parameter
+
+		pr_info("[lviconfig] SET_CONFIG_PARAM_EEPROM: %-40s addr=0x%04X size=%u\n",
+			mediator.param_string, param->address, param->size);
 
 		break;
 
@@ -230,12 +252,11 @@ static long lviconfig_ioctl(struct file *file, unsigned int cmd, unsigned long a
 		if (mediator.data == NULL) {
 			return -EINVAL; // Invalid data pointer
 		}
-		pr_info("[%s]: called with param_string: %s\n", __func__, mediator.param_string);
 
 		param = ConfigParam_FindByName(mediator.param_string);
 
 		if (!param) {
-			pr_err("[%s]: Parameter not found: %s\n", __func__, mediator.param_string);
+			pr_err("[lviconfig] GET_CONFIG_PARAM: param '%s' not found\n", mediator.param_string);
 			return -ENOENT; // Parameter not found
 		}
 
@@ -245,6 +266,9 @@ static long lviconfig_ioctl(struct file *file, unsigned int cmd, unsigned long a
 		if (copy_to_user((struct lviconfig_mediator *)arg, &mediator, sizeof(struct lviconfig_mediator))) {
 			return -EFAULT; // Copy to user space failed
 		}
+
+		pr_info("[lviconfig] GET_CONFIG_PARAM: %-40s addr=0x%04X size=%u\n",
+			mediator.param_string, param->address, param->size);
 
 		break;
 	default:

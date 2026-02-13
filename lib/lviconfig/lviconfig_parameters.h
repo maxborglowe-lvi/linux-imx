@@ -75,8 +75,8 @@ typedef struct {
 	ConfigParam ZoomMax;
 	ConfigParam ZoomSpeed;
 	ConfigParam Focus;
-	ConfigParam FocusMin;
-	ConfigParam FocusMax;
+	ConfigParam FocusRangeMin;
+	ConfigParam FocusRangeMax;
 	ConfigParam FocusSpeed;
 	ConfigParam NaturalColorExposure;
 	ConfigParam ArtificialColorExposure;
@@ -173,5 +173,7 @@ void ConfigParam_PrintParam(ConfigParam *param); // Primarily for user-space deb
 void ConfigParam_PrintAll(void); // Primarily for user-space debugging
 void ConfigParam_SetData(ConfigParam *param, const void *data);
 const void *ConfigParam_GetData(ConfigParam *param);
+int ConfigParam_SaveParam(ConfigParam *param);
+int ConfigParam_SaveAll(void);
 
 #endif // LVICONFIG_PARAMETERS_H

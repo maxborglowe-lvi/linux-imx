@@ -30,6 +30,7 @@ struct ConfigParam {
 
 Only the `name` and `data` fields are typically needed when accessing a parameter from other drivers.
 The remaining fields are used internally by `lviconfig_ctrl.c` to perform EEPROM read/write operations.
+The driver keeps track of the data stored in the EEPROM, making sure that no unnecessary writes are performed if the new data is identical to the current data (see ConfigParam_SaveAll).
 
 The ConfigParam can then be grouped into other structs, such as `confMonitorMode`, which holds all parameters related to that higher-level struct.
 
