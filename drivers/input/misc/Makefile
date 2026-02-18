@@ -89,3 +89,4 @@ obj-$(CONFIG_SENSOR_FXLS8471)       	+= fxls8471.o fxls8471_i2c.o
 obj-$(CONFIG_INPUT_ISL29023)            += isl29023.o
 obj-$(CONFIG_SENSOR_IMX_RPMSG)		+= rpmsg_input.o
 obj-$(CONFIG_INPUT_LVIPANEL)		+= lvipanel.o
+obj-$(CONFIG_INPUT_LVICONFIG_CTRL)		+= lviconfig_ctrl.o

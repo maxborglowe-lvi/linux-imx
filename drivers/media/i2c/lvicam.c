@@ -36,7 +36,7 @@
 
 #include "tc358746_regs.h"
 #include "lvicam.h"
-#include "../../../lib/lviconfig/lviconfig_parameters.h"
+#include <linux/lviconfig_parameters.h>
 
 #include <linux/signal.h>
 #include <linux/gpio/consumer.h>
@@ -454,6 +454,11 @@ static void lvicam_setup(struct v4l2_subdev *sd)
 	//**************************************************
 	i2c_wr16(sd, 0x0500, 0x8087); // CSI2 lane setting, CSI2 mode=HS
 	i2c_wr16(sd, 0x0502, 0xA300); // bit set
+	/*
+	 * CONFCTL register: PPEN=1, PDATAF=MODE1 (16-bit parallel bus),
+	 * DATALANE=4 lanes. The FPGA sends 16-bit parallel YCbCr data,
+	 * so MODE1 is correct despite the CSI output being UYVY8_2X8.
+	 */
 	i2c_wr16(sd, 0x0004, 0x0143); // Configuration Control Register
 }
 
@@ -586,23 +591,48 @@ static int lvicam_enum_frame_interval(struct v4l2_subdev *sd, struct v4l2_subdev
 	return 0;
 }
 
+static int lvicam_g_frame_interval(struct v4l2_subdev *sd,
+				   struct v4l2_subdev_frame_interval *fi)
+{
+	pr_info("[%s] call\n", __func__);
+
+	fi->interval.numerator = 1;
+	fi->interval.denominator = 60;
+
+	return 0;
+}
+
+static int lvicam_s_frame_interval(struct v4l2_subdev *sd,
+				   struct v4l2_subdev_frame_interval *fi)
+{
+	pr_info("[%s] call\n", __func__);
+
+	/* Fixed 60 fps output from FPGA - ignore requested interval */
+	fi->interval.numerator = 1;
+	fi->interval.denominator = 60;
+
+	return 0;
+}
+
 static const struct v4l2_subdev_pad_ops lvicam_pad_ops = {
 	.enum_mbus_code = lvicam_enum_mbus_code,
-	.get_fmt = lvicam_get_fmt, //lvicam_get_pad_format,
-	.set_fmt = lvicam_set_fmt, //lvicam_set_pad_format,
-	//.link_validate = lvicam_link_validate, // Maybe not relevant?
-	// This we will probably need!, We support two frame sizez?
+	.get_fmt = lvicam_get_fmt,
+	.set_fmt = lvicam_set_fmt,
 	.enum_frame_size = lvicam_enum_frame_size,
 	.enum_frame_interval = lvicam_enum_frame_interval,
 };
 
 static const struct v4l2_subdev_video_ops tc358746_video_ops = {
 	.s_stream = lvicam_set_stream,
+	.g_frame_interval = lvicam_g_frame_interval,
+	.s_frame_interval = lvicam_s_frame_interval,
 };
 
 static void lvicam_gpio_reset(struct lvicam *lvicam)
 {
 	pr_info("[%s] call\n", __func__);
+	if (!lvicam->reset_gpio)
+		return;
 	usleep_range(5000, 10000);
 	gpiod_set_value_cansleep(lvicam->reset_gpio, 1);
 	usleep_range(1000, 2000);
@@ -613,15 +643,15 @@ static void lvicam_gpio_reset(struct lvicam *lvicam)
 static void lvicam_gpio_on_set(struct lvicam *lvicam)
 {
 	pr_info("[%s] call\n", __func__);
-	gpiod_set_value_cansleep(lvicam->onoff_gpio, 1);
-	// usleep_range(5000, 10000);
+	if (lvicam->onoff_gpio)
+		gpiod_set_value_cansleep(lvicam->onoff_gpio, 1);
 }
 
 static void lvicam_gpio_off_set(struct lvicam *lvicam)
 {
 	pr_info("[%s] call\n", __func__);
-	gpiod_set_value_cansleep(lvicam->onoff_gpio, 0);
-	// usleep_range(5000, 10000);
+	if (lvicam->onoff_gpio)
+		gpiod_set_value_cansleep(lvicam->onoff_gpio, 0);
 }
 
 static int lvicam_s_power(struct v4l2_subdev *sd, int on)
@@ -630,19 +660,20 @@ static int lvicam_s_power(struct v4l2_subdev *sd, int on)
 
 	struct lvicam *lvicam = to_lvicam(sd);
 
-	pr_info("[%s] Asserting power pin.\n", __func__);
-	gpiod_set_value(lvicam->power_gpio, 1);
+	if (on) {
+		pr_info("[%s] Asserting power pin.\n", __func__);
+		if (lvicam->power_gpio)
+			gpiod_set_value(lvicam->power_gpio, 1);
 
-	pr_info("[%s] Resetting Toshiba converter chip.\n", __func__);
-	lvicam_gpio_reset(lvicam);
-
-	// pr_info("[%s] Setting the onoff gpio LOW.\n", __func__);
-	// lvicam_gpio_off_set(lvicam);
-
-	// usleep_range(10000, 20000);
-
-	// pr_info("[%s] Setting the onoff gpio HIGH.\n", __func__);
-	// lvicam_gpio_on_set(lvicam);
+		pr_info("[%s] Resetting Toshiba converter chip.\n", __func__);
+		lvicam_gpio_reset(lvicam);
+	} else {
+		pr_info("[%s] Powering down.\n", __func__);
+		/* Do not reset the TC358746 on power-off;
+		 * a reset here would wipe registers that
+		 * s_stream(1) already programmed.
+		 */
+	}
 
 	return 0;
 }
@@ -997,8 +1028,8 @@ static int lvicam_probe(struct i2c_client *client)
 	// Initialize v4l2 subdev early so we can use v4l2_err if needed
 	v4l2_i2c_subdev_init(&lvicam->sd, client, &lvicam_subdev_ops);
 
-	// Get power enable GPIO
-	lvicam->power_gpio = devm_gpiod_get(&client->dev, "power", GPIOD_OUT_HIGH);
+	// Get power enable GPIO (optional)
+	lvicam->power_gpio = devm_gpiod_get_optional(&client->dev, "power", GPIOD_OUT_HIGH);
 	if (IS_ERR(lvicam->power_gpio)) {
 		err = PTR_ERR(lvicam->power_gpio);
 		if (err == -EPROBE_DEFER) {
@@ -1008,39 +1039,35 @@ static int lvicam_probe(struct i2c_client *client)
 		}
 		goto destroy_mutex;
 	}
-	// pr_info("[%s] power GPIO found. Initialized HIGH.\n", __func__);
-	// gpiod_set_value(lvicam->power_gpio, 1);
+	if (lvicam->power_gpio)
+		pr_info("[%s] power GPIO found\n", __func__);
+	else
+		pr_info("[%s] power GPIO not specified, assuming always enabled\n", __func__);
 
-	// Get ONOFF GPIO
-	v4l2_err(&lvicam->sd, "Fetching onoff gpio\n");
-	lvicam->onoff_gpio = devm_gpiod_get(&client->dev, "onoff", GPIOD_OUT_HIGH);
-
+	// Get ONOFF GPIO (optional)
+	lvicam->onoff_gpio = devm_gpiod_get_optional(&client->dev, "onoff", GPIOD_OUT_HIGH);
 	if (IS_ERR(lvicam->onoff_gpio)) {
-		pr_err("[%s] : ERROR - Failed to get onoff gpio\n", __func__);
-		v4l2_err(&lvicam->sd, "Failed to get onoff gpio\n");
 		err = PTR_ERR(lvicam->onoff_gpio);
+		pr_err("[%s] Failed to get onoff gpio: %d\n", __func__, err);
 		goto destroy_mutex;
-	} else if (lvicam->onoff_gpio) {
-		pr_info("[%s] onoff GPIO found\n", __func__);
-		// gpiod_set_value_cansleep(lvicam->onoff_gpio, 1); // Set onoff GPIO high
-	} else {
-		pr_info("[%s] onoff GPIO not found, assuming always enabled\n", __func__);
 	}
+	if (lvicam->onoff_gpio)
+		pr_info("[%s] onoff GPIO found\n", __func__);
+	else
+		pr_info("[%s] onoff GPIO not specified, assuming always enabled\n", __func__);
 
-	// Get reset GPIO
-	v4l2_err(&lvicam->sd, "Fetching reset gpio\n");
-	lvicam->reset_gpio = devm_gpiod_get(&client->dev, "reset", GPIOD_OUT_LOW);
-
+	// Get reset GPIO (optional)
+	lvicam->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset", GPIOD_OUT_LOW);
 	if (IS_ERR(lvicam->reset_gpio)) {
-		pr_err("[%s] : ERROR - Failed to get reset gpio\n", __func__);
-		v4l2_err(&lvicam->sd, "Failed to get reset gpio\n");
 		err = PTR_ERR(lvicam->reset_gpio);
+		pr_err("[%s] Failed to get reset gpio: %d\n", __func__, err);
 		goto destroy_mutex;
-	} else if (lvicam->reset_gpio) {
+	}
+	if (lvicam->reset_gpio) {
 		pr_info("[%s] reset GPIO found\n", __func__);
-		gpiod_set_value_cansleep(lvicam->reset_gpio, 1); // Set reset GPIO high
+		gpiod_set_value_cansleep(lvicam->reset_gpio, 1);
 	} else {
-		pr_info("[%s] reset GPIO not found, assuming always enabled\n", __func__);
+		pr_info("[%s] reset GPIO not specified, assuming no reset needed\n", __func__);
 	}
 
 	// Get seesaw GPIO
@@ -1140,11 +1167,14 @@ static int lvicam_remove(struct i2c_client *client)
 	struct lvicam *lvicam = to_lvicam(sd);
 
 	pr_info("[%s] Resetting toshiba.\n", __func__);
-	gpiod_set_value(lvicam->reset_gpio, 0); // reset the toshiba converter chip
+	if (lvicam->reset_gpio)
+		gpiod_set_value(lvicam->reset_gpio, 0);
 	pr_info("[%s] De-asserting power pin.\n", __func__);
-	gpiod_set_value(lvicam->power_gpio, 0); // Disable the power supply
+	if (lvicam->power_gpio)
+		gpiod_set_value(lvicam->power_gpio, 0);
 	pr_info("[%s] Setting the onoff gpio LOW.\n", __func__);
-	// lvicam_gpio_on_set(lvicam);
+	if (lvicam->onoff_gpio)
+		gpiod_set_value(lvicam->onoff_gpio, 0);
 
 	v4l2_async_unregister_subdev(sd);
 	media_entity_cleanup(&sd->entity);

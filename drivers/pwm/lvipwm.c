@@ -7,7 +7,7 @@
 #include <linux/platform_device.h>
 #include <linux/ioctl.h>
 
-#include "../../lib/lviconfig/lviconfig_parameters.h"
+#include <linux/lviconfig_parameters.h>
 
 #define PWM_MAGIC 'P'
 

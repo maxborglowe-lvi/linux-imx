@@ -258,6 +258,7 @@ obj-$(CONFIG_SG_SPLIT) += sg_split.o
 obj-$(CONFIG_SG_POOL) += sg_pool.o
 obj-$(CONFIG_MEMREGION) += memregion.o
 obj-$(CONFIG_STMP_DEVICE) += stmp_device.o
+obj-$(CONFIG_LVICONFIG_PARAMETERS_LIB) += lviconfig_parameters.o
 obj-$(CONFIG_IRQ_POLL) += irq_poll.o
 
 # stackdepot.c should not be instrumented or call instrumented functions.
@@ -353,5 +354,3 @@ obj-$(CONFIG_BITFIELD_KUNIT) += bitfield_kunit.o
 obj-$(CONFIG_LIST_KUNIT_TEST) += list-test.o
 obj-$(CONFIG_LINEAR_RANGES_TEST) += test_linear_ranges.o
 obj-$(CONFIG_BITS_TEST) += test_bits.o
-
-obj-y += lviconfig/

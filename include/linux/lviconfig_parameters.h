@@ -75,8 +75,8 @@ typedef struct {
 	ConfigParam ZoomMax;
 	ConfigParam ZoomSpeed;
 	ConfigParam Focus;
-	ConfigParam FocusRangeMin;
-	ConfigParam FocusRangeMax;
+	ConfigParam FocusMin;
+	ConfigParam FocusMax;
 	ConfigParam FocusSpeed;
 	ConfigParam NaturalColorExposure;
 	ConfigParam ArtificialColorExposure;
@@ -91,6 +91,23 @@ typedef struct {
 	ConfigParam Contrast;
 	ConfigParam Brightness;
 	ConfigParam Saturation;
+	ConfigParam AutoPosNegEnable;
+	ConfigParam AutoPosNegMin;
+	ConfigParam AutoPosNegMax;
+	ConfigParam NaturalColorContrast;
+	ConfigParam NaturalColorBrightnessDefault;
+	ConfigParam NaturalColorBrightnessCoefficient;
+	ConfigParam NaturalColorDefault;
+	ConfigParam NaturalColorCoefficient;
+	ConfigParam ArtificalColorContrast;
+	ConfigParam ArtificalColorBrightness;
+	ConfigParam BlackLinesTop;
+	ConfigParam BlackLinesBottom;
+	ConfigParam GammaCorrection1;
+	ConfigParam GammaCorrection2;
+	ConfigParam GammaCorrection3;
+	ConfigParam GammaCorrection4;
+	ConfigParam GammaCorrection5;
 } ConfigMonitorMode;
 
 typedef struct {
@@ -162,18 +179,20 @@ extern ConfigLighting confLighting;
 
 // Platform-specific EEPROM access functions
 // probably only kernel use is required
-int lviconfig_platform_eeprom_write(uint32_t reg, uint8_t data);
-int lviconfig_platform_eeprom_read(uint32_t reg, uint8_t *data);
+// int platform_eeprom_write(uint32_t reg, uint8_t data);
+// int platform_eeprom_read(uint32_t reg, uint8_t *data);
 
 ConfigParam ConfigParam_Init(const char *name, const void *data, DataType type); // name should be const
 ConfigParam *ConfigParam_FindByName(const char *path);
 void ConfigParam_InitAll(void);
-void ConfigParam_ParseEEPROM(void);
-void ConfigParam_PrintParam(ConfigParam *param); // Primarily for user-space debugging
-void ConfigParam_PrintAll(void); // Primarily for user-space debugging
-void ConfigParam_SetData(ConfigParam *param, const void *data);
-const void *ConfigParam_GetData(ConfigParam *param);
-int ConfigParam_SaveParam(ConfigParam *param);
-int ConfigParam_SaveAll(void);
+void ConfigParam_ParseEEPROM(int (*platform_eeprom_read)(uint32_t, uint8_t *));
+void ConfigParam_PrintParam(ConfigParam *param, int (*platform_eeprom_read)(uint32_t, uint8_t *)); // Primarily for user-space debugging
+void ConfigParam_PrintAll(int (*platform_eeprom_read)(uint32_t, uint8_t *)); // Primarily for user-space debugging
+void ConfigParam_SetData(ConfigParam *param, const void *data, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t));
+const void *ConfigParam_GetData(ConfigParam *param, int (*platform_eeprom_read)(uint32_t, uint8_t *));
+int ConfigParam_IsInitialized(void);
+void ConfigParam_MarkInitialized(void);
+int ConfigParam_SaveParam(ConfigParam *param, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t));
+int ConfigParam_SaveAll(int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t));
 
 #endif // LVICONFIG_PARAMETERS_H

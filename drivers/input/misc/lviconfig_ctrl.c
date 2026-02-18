@@ -14,8 +14,17 @@
  * @version 1.0
  */
 
-#include "lviconfig_ctrl.h"
-#include <linux/gpio/consumer.h>
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/i2c.h>
+#include <linux/fs.h>
+#include <linux/uaccess.h>
+#include <linux/ioctl.h>
+#include <linux/device.h>
+#include <linux/of.h>
+#include <linux/delay.h>
+
+#include <linux/lviconfig_parameters.h>
 
 #define DEVICE_NAME "lviconfig_ctrl"
 #define EEPROM_CELLS 4 // amount of addressable eeprom cells
@@ -27,21 +36,19 @@
 #define IOCTL_WRITE_DATA _IOW('e', 1, struct eeprom_data)
 #define IOCTL_READ_DATA _IOR('e', 2, struct eeprom_data)
 
-struct lviconfig_mediator {
-	char *param_string;
-	void *data;
+struct lviconfig_ctrl_mediator {
+	char __user *param_string;
+	void __user *data;
 };
 
-#define IOCTL_SET_CONFIG_PARAM _IOW('C', 3, struct lviconfig_mediator)
-#define IOCTL_GET_CONFIG_PARAM _IOR('C', 4, struct lviconfig_mediator)
-#define IOCTL_SET_CONFIG_PARAM_EEPROM _IOW('C', 5, struct lviconfig_mediator)
+#define IOCTL_SET_CONFIG_PARAM _IOW('C', 3, struct lviconfig_ctrl_mediator)
+#define IOCTL_GET_CONFIG_PARAM _IOR('C', 4, struct lviconfig_ctrl_mediator)
+#define IOCTL_SET_CONFIG_PARAM_EEPROM _IOW('C', 5, struct lviconfig_ctrl_mediator)
 #define IOCTL_SAVE_ALL_CONFIG_PARAMS _IO('C', 6)
 
 static int major;
 static struct i2c_client *i2c_client_g;
-static struct class *lviconfig_class;
-
-static struct gpio_desc *write_control_gpio;
+static struct class *lviconfig_ctrl_class;
 
 #define REG_SIZE_8 2
 #define REG_SIZE_16 3
@@ -56,7 +63,7 @@ struct eeprom_data {
 
 // Kernel-space implementations of platform_eeprom functions
 #ifdef __KERNEL__
-int lviconfig_platform_eeprom_write(uint32_t reg, uint8_t data_val)
+int platform_eeprom_write(uint32_t reg, uint8_t data_val)
 {
 	struct i2c_msg msgs[1];
 	uint8_t buf[5]; // Max: 4 address bytes + 1 data byte (for some EEPROM types, though we send 1 byte addr + 1 data for M24C like)
@@ -106,7 +113,7 @@ int lviconfig_platform_eeprom_write(uint32_t reg, uint8_t data_val)
 	return 0;
 }
 
-int lviconfig_platform_eeprom_read(uint32_t reg, uint8_t *data_val)
+int platform_eeprom_read(uint32_t reg, uint8_t *data_val)
 {
 	struct i2c_msg msgs[2];
 	uint8_t internal_addr_buf[1];
@@ -152,13 +159,13 @@ int lviconfig_platform_eeprom_read(uint32_t reg, uint8_t *data_val)
 #endif // __KERNEL__
 
 // Device tree match table
-static const struct of_device_id lviconfig_of_match[] = {
+static const struct of_device_id lviconfig_ctrl_of_match[] = {
 	{
 		.compatible = "lvi,lviconfig",
 	},
 	{},
 };
-MODULE_DEVICE_TABLE(of, lviconfig_of_match);
+MODULE_DEVICE_TABLE(of, lviconfig_ctrl_of_match);
 
 /**
  * @brief IOCTL handler for the EEPROM device.
@@ -171,106 +178,128 @@ MODULE_DEVICE_TABLE(of, lviconfig_of_match);
  * @param arg Pointer to the user-space data structure.
  * @return 0 on success, negative error code on failure.
  */
-static long lviconfig_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+static long lviconfig_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	int ret;
 
 	ConfigParam *param;
 
-	struct lviconfig_mediator mediator; /**< Mediator structure for config parameters */
+	struct lviconfig_ctrl_mediator mediator; /**< Mediator structure for config parameters */
 
 	/* Handle commands that don't need mediator data first */
 	if (cmd == IOCTL_SAVE_ALL_CONFIG_PARAMS) {
 		pr_info("[lviconfig] SAVE_ALL_CONFIG_PARAMS\n");
-		ret = ConfigParam_SaveAll();
+
+		ret = ConfigParam_SaveAll(platform_eeprom_read, platform_eeprom_write);
+
 		if (ret < 0) {
 			pr_err("[lviconfig] SAVE_ALL_CONFIG_PARAMS failed: %d\n", ret);
 			return ret;
 		}
+
 		pr_info("[lviconfig] SAVE_ALL_CONFIG_PARAMS complete: %d params written\n", ret);
+
 		return 0;
 	}
 
-	/* For other commands, copy mediator from user space */
-	if (copy_from_user(&mediator, (struct lviconfig_mediator *)arg, sizeof(struct lviconfig_mediator))) {
+	if (copy_from_user(&mediator, (struct lviconfig_ctrl_mediator *)arg, sizeof(struct lviconfig_ctrl_mediator))) {
 		return -EFAULT;
 	}
 
 	switch (cmd) {
-	case IOCTL_SET_CONFIG_PARAM:
-		if (mediator.param_string == NULL) {
-			return -EINVAL; // Invalid parameter string
-		}
-		if (mediator.data == NULL) {
-			return -EINVAL; // Invalid data pointer
-		}
+	case IOCTL_SET_CONFIG_PARAM: {
+		char kparam_string[128];
 
-		param = ConfigParam_FindByName(mediator.param_string);
+		if (!mediator.param_string)
+			return -EINVAL;
+		if (!mediator.data)
+			return -EINVAL;
+
+		if (copy_from_user(kparam_string, mediator.param_string, sizeof(kparam_string) - 1))
+			return -EFAULT;
+		kparam_string[sizeof(kparam_string) - 1] = '\0';
+
+		param = ConfigParam_FindByName(kparam_string);
 
 		if (!param) {
-			pr_err("[lviconfig] SET_CONFIG_PARAM: param '%s' not found\n", mediator.param_string);
-			return -ENOENT; // Parameter not found
+			pr_err("[%s]: Parameter not found: %s\n", __func__, kparam_string);
+			return -ENOENT;
 		}
 
-		/* Copy data from user space into kernel param->data buffer */
 		if (copy_from_user(param->data, mediator.data, param->size)) {
-			pr_err("[lviconfig] SET_CONFIG_PARAM: copy_from_user failed for '%s'\n", mediator.param_string);
+			pr_err("[%s]: Failed to copy data from user space\n", __func__);
 			return -EFAULT;
 		}
 
-		pr_info("[lviconfig] SET_CONFIG_PARAM: %-40s addr=0x%04X size=%u\n",
-			mediator.param_string, param->address, param->size);
-
 		break;
-	case IOCTL_SET_CONFIG_PARAM_EEPROM:
-		if (mediator.param_string == NULL) {
-			return -EINVAL; // Invalid parameter string
-		}
-		if (mediator.data == NULL) {
-			return -EINVAL; // Invalid data pointer
-		}
+	}
 
-		param = ConfigParam_FindByName(mediator.param_string);
+	case IOCTL_SET_CONFIG_PARAM_EEPROM: {
+		char kparam_string[128];
+
+		if (!mediator.param_string)
+			return -EINVAL;
+		if (!mediator.data)
+			return -EINVAL;
+
+		if (copy_from_user(kparam_string, mediator.param_string, sizeof(kparam_string) - 1))
+			return -EFAULT;
+		kparam_string[sizeof(kparam_string) - 1] = '\0';
+
+		param = ConfigParam_FindByName(kparam_string);
 
 		if (!param) {
-			pr_err("[lviconfig] SET_CONFIG_PARAM_EEPROM: param '%s' not found\n", mediator.param_string);
-			return -ENOENT; // Parameter not found
+			pr_err("[%s]: Parameter not found: %s\n", __func__, kparam_string);
+			return -ENOENT;
 		}
 
-		ConfigParam_SetData(param, mediator.data); // Set the data for the parameter
+		// Allocate a new kernel buffer for the data
+		void *kdata = kmalloc(param->size, GFP_KERNEL);
+		if (!kdata) {
+			pr_err("[%s]: Failed to allocate kernel buffer\n", __func__);
+			return -ENOMEM;
+		}
 
-		pr_info("[lviconfig] SET_CONFIG_PARAM_EEPROM: %-40s addr=0x%04X size=%u\n",
-			mediator.param_string, param->address, param->size);
+		// Copy data from user space to the new kernel buffer
+		if (copy_from_user(kdata, mediator.data, param->size)) {
+			pr_err("[%s]: Failed to copy data from user space\n", __func__);
+			kfree(kdata);
+			return -EFAULT;
+		}
+
+		ConfigParam_SetData(param, kdata, platform_eeprom_read,
+				    platform_eeprom_write); // Set the data for the parameter
+
+		kfree(kdata);
 
 		break;
+	}
 
-	case IOCTL_GET_CONFIG_PARAM:
+	case IOCTL_GET_CONFIG_PARAM: {
+		char kparam_string[128];
 
-		if (mediator.param_string == NULL) {
-			return -EINVAL; // Invalid parameter string
-		}
-		if (mediator.data == NULL) {
-			return -EINVAL; // Invalid data pointer
-		}
+		if (!mediator.param_string)
+			return -EINVAL;
+		if (!mediator.data)
+			return -EINVAL;
 
-		param = ConfigParam_FindByName(mediator.param_string);
+		if (copy_from_user(kparam_string, mediator.param_string, sizeof(kparam_string) - 1))
+			return -EFAULT;
+		kparam_string[sizeof(kparam_string) - 1] = '\0';
+
+		param = ConfigParam_FindByName(kparam_string);
 
 		if (!param) {
-			pr_err("[lviconfig] GET_CONFIG_PARAM: param '%s' not found\n", mediator.param_string);
-			return -ENOENT; // Parameter not found
+			pr_err("[%s]: Parameter not found: %s\n", __func__, kparam_string);
+			return -ENOENT;
 		}
 
-		memcpy(mediator.data, param->data,
-		       param->size); // Copy the data to user space
-
-		if (copy_to_user((struct lviconfig_mediator *)arg, &mediator, sizeof(struct lviconfig_mediator))) {
-			return -EFAULT; // Copy to user space failed
-		}
-
-		pr_info("[lviconfig] GET_CONFIG_PARAM: %-40s addr=0x%04X size=%u\n",
-			mediator.param_string, param->address, param->size);
+		if (copy_to_user(mediator.data, param->data, param->size))
+			return -EFAULT;
 
 		break;
+	}
+
 	default:
 		break;
 	}
@@ -278,44 +307,31 @@ static long lviconfig_ioctl(struct file *file, unsigned int cmd, unsigned long a
 	return 0;
 }
 
-static int lviconfig_open(struct inode *inode, struct file *file)
+static int lviconfig_ctrl_open(struct inode *inode, struct file *file)
 {
 	return 0;
 }
 
-static int lviconfig_release(struct inode *inode, struct file *file)
+static int lviconfig_ctrl_release(struct inode *inode, struct file *file)
 {
 	return 0;
 }
 
 static struct file_operations fops = {
 	.owner = THIS_MODULE,
-	.open = lviconfig_open,
-	.release = lviconfig_release,
-	.unlocked_ioctl = lviconfig_ioctl,
+	.open = lviconfig_ctrl_open,
+	.release = lviconfig_ctrl_release,
+	.unlocked_ioctl = lviconfig_ctrl_ioctl,
 };
 
-// lviconfig_probe: Initialize parameters here
-static int lviconfig_probe(struct i2c_client *client, const struct i2c_device_id *id)
+// lviconfig_ctrl_probe: Initialize parameters here
+static int lviconfig_ctrl_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	int ret; // For return values
 
 	pr_info("[%s]: probe called for I2C client at addr 0x%x\n", __func__, client->addr);
 
 	i2c_client_g = client; // Store the client globally for platform functions
-
-	write_control_gpio = devm_gpiod_get_optional(&client->dev, "write-control", GPIOD_OUT_LOW);
-	if (IS_ERR(write_control_gpio)) {
-		ret = PTR_ERR(write_control_gpio);
-		pr_err("[%s]: failed to acquire write-control gpio: %d\n", __func__, ret);
-		i2c_client_g = NULL;
-		return ret;
-	}
-
-	gpiod_set_value_cansleep(write_control_gpio, 1); // Enable write access if GPIO is defined
-	usleep_range(500, 1000);
-	gpiod_set_value_cansleep(write_control_gpio, 0); // Enable write access if GPIO is defined
-	usleep_range(500, 1000);
 
 	major = register_chrdev(0, DEVICE_NAME, &fops);
 	if (major < 0) {
@@ -324,17 +340,17 @@ static int lviconfig_probe(struct i2c_client *client, const struct i2c_device_id
 		return major;
 	}
 
-	lviconfig_class = class_create(THIS_MODULE, DEVICE_NAME);
-	if (IS_ERR(lviconfig_class)) {
+	lviconfig_ctrl_class = class_create(THIS_MODULE, DEVICE_NAME);
+	if (IS_ERR(lviconfig_ctrl_class)) {
 		pr_err("[%s]: Failed to create device class\n", __func__);
 		unregister_chrdev(major, DEVICE_NAME);
 		i2c_client_g = NULL;
-		return PTR_ERR(lviconfig_class);
+		return PTR_ERR(lviconfig_ctrl_class);
 	}
 
-	if (device_create(lviconfig_class, NULL, MKDEV(major, 0), NULL, DEVICE_NAME) == NULL) {
+	if (device_create(lviconfig_ctrl_class, NULL, MKDEV(major, 0), NULL, DEVICE_NAME) == NULL) {
 		pr_err("[%s]: Failed to create device node\n", __func__);
-		class_destroy(lviconfig_class);
+		class_destroy(lviconfig_ctrl_class);
 		unregister_chrdev(major, DEVICE_NAME);
 		i2c_client_g = NULL;
 		return -ENODEV; // Use a standard error code
@@ -344,10 +360,12 @@ static int lviconfig_probe(struct i2c_client *client, const struct i2c_device_id
 
 	// Initialize parameter structures and their EEPROM addresses
 	ConfigParam_InitAll();
-	pr_info("[%s]: ConfigParam structures initialized.\n", __func__);
 
-	ConfigParam_ParseEEPROM(); // Read existing EEPROM content into parameters
+	ConfigParam_ParseEEPROM(platform_eeprom_read); // Read existing EEPROM content into parameters
 	pr_info("[%s]: ConfigParam structures populated from EEPROM.\n", __func__);
+
+	ConfigParam_MarkInitialized(); // Mark lviconfig as initialized
+	pr_info("[%s]: ConfigParam structures initialized.\n", __func__);
 
 	// ConfigParam_PrintAll();
 
@@ -359,13 +377,13 @@ static int lviconfig_probe(struct i2c_client *client, const struct i2c_device_id
 /**
  * @brief Remove function for I2C driver.
  */
-static int lviconfig_remove(struct i2c_client *client)
+static int lviconfig_ctrl_remove(struct i2c_client *client)
 {
 	pr_info("[%s]: remove called for I2C client at addr 0x%x\n", __func__, client->addr);
 
 	// Cleanup: Destroy device and class, unregister char device
-	device_destroy(lviconfig_class, MKDEV(major, 0));
-	class_destroy(lviconfig_class);
+	device_destroy(lviconfig_ctrl_class, MKDEV(major, 0));
+	class_destroy(lviconfig_ctrl_class);
 	unregister_chrdev(major, DEVICE_NAME);
 	i2c_client_g = NULL; // Clear the global client pointer
 
@@ -378,27 +396,27 @@ static int lviconfig_remove(struct i2c_client *client)
 }
 
 // I2C device ID table
-static const struct i2c_device_id lviconfig_id[] = {
+static const struct i2c_device_id lviconfig_ctrl_id[] = {
 	{ DEVICE_NAME, 0 },
 	{},
 };
-MODULE_DEVICE_TABLE(i2c, lviconfig_id);
+MODULE_DEVICE_TABLE(i2c, lviconfig_ctrl_id);
 
 /**
  * @brief I2C driver structure.
  */
-static struct i2c_driver lviconfig_driver = {
+static struct i2c_driver lviconfig_ctrl_driver = {
     .driver = {
         .name = DEVICE_NAME,
         .owner = THIS_MODULE,
-        .of_match_table = lviconfig_of_match,
+        .of_match_table = lviconfig_ctrl_of_match,
     },
-    .probe = lviconfig_probe,
-    .remove = lviconfig_remove,
-    .id_table = lviconfig_id,
+    .probe = lviconfig_ctrl_probe,
+    .remove = lviconfig_ctrl_remove,
+    .id_table = lviconfig_ctrl_id,
 };
 
-module_i2c_driver(lviconfig_driver);
+module_i2c_driver(lviconfig_ctrl_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Max Borglowe");
