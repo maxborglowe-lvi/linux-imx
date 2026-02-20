@@ -1,8 +1,10 @@
-#include "lviconfig_parameters.h"
-// #include "lviconfig_ctrl.h"
+#include <linux/module.h>
+#include <linux/lviconfig_parameters.h>
 
 //copy string to variable
 #define STRDUP(s) kstrdup(s, GFP_KERNEL)
+
+static int lviconfig_initialized = 0;
 
 //kernel version of atoi
 static inline int katoi(const char *s)
@@ -56,6 +58,46 @@ EXPORT_SYMBOL(confGraphics);
 EXPORT_SYMBOL(confPTZ);
 EXPORT_SYMBOL(confBattery);
 EXPORT_SYMBOL(confLighting);
+
+/* Flat list of all ConfigParam pointers, built by build_param_list() at end of ConfigParam_InitAll.
+ * Used by ConfigParam_ParseEEPROM and ConfigParam_ReadAndSaveAll to avoid enumerating params in 3 places.
+ */
+#define ALL_PARAMS_MAX 350
+static ConfigParam *all_params[ALL_PARAMS_MAX];
+static size_t num_params;
+
+/**
+ * @brief Serialize src into dst according to type (little-endian).
+ * @return 0 on success, -1 for unknown type.
+ */
+static int serialize_data(uint8_t *dst, const void *src, DataType type, uint8_t size)
+{
+	switch (type) {
+	case TYPE_8:
+		memcpy(dst, src, size);
+		break;
+	case TYPE_16:
+		dst[0] = ((const uint16_t *)src)[0] & 0xFF;
+		dst[1] = (((const uint16_t *)src)[0] >> 8) & 0xFF;
+		break;
+	case TYPE_32:
+		dst[0] = ((const uint32_t *)src)[0] & 0xFF;
+		dst[1] = (((const uint32_t *)src)[0] >> 8) & 0xFF;
+		dst[2] = (((const uint32_t *)src)[0] >> 16) & 0xFF;
+		dst[3] = (((const uint32_t *)src)[0] >> 24) & 0xFF;
+		break;
+	case TYPE_ARRAY:
+		memcpy(dst, src, size);
+		break;
+	case TYPE_STRING:
+		strncpy((char *)dst, (const char *)src, size - 1);
+		dst[size - 1] = '\0';
+		break;
+	default:
+		return -1;
+	}
+	return 0;
+}
 
 /**
  * @brief Initialize a configuration parameter.
@@ -119,37 +161,131 @@ ConfigParam ConfigParam_Init(const char *name_str, const void *data, DataType ty
 		return param;
 	}
 
-	if (data) {
-		switch (type) {
-		case TYPE_8:
-			memcpy(param.data, data, param.size);
-			break;
-		case TYPE_16:
-			param.data[0] = ((uint16_t *)data)[0] & 0xFF;
-			param.data[1] = (((uint16_t *)data)[0] >> 8) & 0xFF;
-			break;
-		case TYPE_32:
-			param.data[0] = ((uint32_t *)data)[0] & 0xFF;
-			param.data[1] = (((uint32_t *)data)[0] >> 8) & 0xFF;
-			param.data[2] = (((uint32_t *)data)[0] >> 16) & 0xFF;
-			param.data[3] = (((uint32_t *)data)[0] >> 24) & 0xFF;
-			break;
-		case TYPE_ARRAY:
-			memcpy(param.data, data, param.size);
-			break;
-		case TYPE_STRING:
-			strncpy((char *)param.data, (const char *)data, param.size - 1);
-			param.data[param.size - 1] = '\0';
-			break;
-		default:
-			break;
-		}
-	} else {
+	if (data)
+		serialize_data(param.data, data, type, param.size);
+	else
 		memset(param.data, 0, param.size);
-	}
 
 	addr += param.size;
 	return param;
+}
+
+/**
+ * @brief Build the flat all_params[] list from all initialized ConfigParam fields.
+ * Called at the end of ConfigParam_InitAll. After this, ParseEEPROM and
+ * ReadAndSaveAll can iterate over all_params[] instead of enumerating fields manually.
+ */
+static void build_param_list(void)
+{
+	uint8_t i;
+
+	num_params = 0;
+
+	all_params[num_params++] = &confProductId;
+	all_params[num_params++] = &confFactoryDefaultVersion;
+	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++)
+		all_params[num_params++] = &confLicenseKey[i];
+	all_params[num_params++] = &confFunctions.Seesaw;
+	all_params[num_params++] = &confFunctions.ReferenceLine;
+	all_params[num_params++] = &confFunctions.Curtain;
+	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
+		all_params[num_params++] = &confColor[i].Group;
+		all_params[num_params++] = &confColor[i].ArtificialColorPoint1;
+		all_params[num_params++] = &confColor[i].ArtificialColorPoint2;
+		all_params[num_params++] = &confColor[i].ArtificialColorPoint3;
+		all_params[num_params++] = &confColor[i].ArtificialColorPoint4;
+		all_params[num_params++] = &confColor[i].CameraBackground;
+		all_params[num_params++] = &confColor[i].ReferenceLine;
+		all_params[num_params++] = &confColor[i].Restricted;
+	}
+	all_params[num_params++] = &confCamera.Type;
+	all_params[num_params++] = &confCamera.RGain;
+	all_params[num_params++] = &confCamera.BGain;
+	all_params[num_params++] = &confCamera.FirstLine;
+	all_params[num_params++] = &confCamera.FirstPixel;
+	all_params[num_params++] = &confCamera.UsableLines;
+	all_params[num_params++] = &confCamera.UsablePixels;
+	all_params[num_params++] = &confCamera.UsableRatio;
+	all_params[num_params++] = &confCamera.Interface;
+	all_params[num_params++] = &confCamera.NaturalColorShutterTime;
+	all_params[num_params++] = &confCamera.NaturalColorBrightness;
+	all_params[num_params++] = &confCamera.NaturalColorIris;
+	all_params[num_params++] = &confCamera.NaturalColorExposureCompensation;
+	all_params[num_params++] = &confCamera.NaturalColorGainPeak;
+	all_params[num_params++] = &confCamera.ArtificialColorShutterTime;
+	all_params[num_params++] = &confCamera.ArtificialColorBrightness;
+	all_params[num_params++] = &confCamera.ArtificialColorIris;
+	all_params[num_params++] = &confCamera.ArtificialColorExposureCompensation;
+	all_params[num_params++] = &confCamera.ArtificialColorGainPeak;
+	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
+		all_params[num_params++] = &confCameraMode[i].Zoom;
+		all_params[num_params++] = &confCameraMode[i].ZoomMin;
+		all_params[num_params++] = &confCameraMode[i].ZoomMax;
+		all_params[num_params++] = &confCameraMode[i].ZoomSpeed;
+		all_params[num_params++] = &confCameraMode[i].Focus;
+		all_params[num_params++] = &confCameraMode[i].FocusMin;
+		all_params[num_params++] = &confCameraMode[i].FocusMax;
+		all_params[num_params++] = &confCameraMode[i].FocusSpeed;
+		all_params[num_params++] = &confCameraMode[i].NaturalColorExposure;
+		all_params[num_params++] = &confCameraMode[i].ArtificialColorExposure;
+		all_params[num_params++] = &confCameraMode[i].WhiteBalance;
+	}
+	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
+		all_params[num_params++] = &confMonitorMode[i].ColorGainR;
+		all_params[num_params++] = &confMonitorMode[i].ColorGainG;
+		all_params[num_params++] = &confMonitorMode[i].ColorGainB;
+		all_params[num_params++] = &confMonitorMode[i].Contrast;
+		all_params[num_params++] = &confMonitorMode[i].Brightness;
+		all_params[num_params++] = &confMonitorMode[i].Saturation;
+		all_params[num_params++] = &confMonitorMode[i].AutoPosNegEnable;
+		all_params[num_params++] = &confMonitorMode[i].AutoPosNegMin;
+		all_params[num_params++] = &confMonitorMode[i].AutoPosNegMax;
+		all_params[num_params++] = &confMonitorMode[i].NaturalColorContrast;
+		all_params[num_params++] = &confMonitorMode[i].NaturalColorBrightnessDefault;
+		all_params[num_params++] = &confMonitorMode[i].NaturalColorBrightnessCoefficient;
+		all_params[num_params++] = &confMonitorMode[i].NaturalColorDefault;
+		all_params[num_params++] = &confMonitorMode[i].NaturalColorCoefficient;
+		all_params[num_params++] = &confMonitorMode[i].ArtificalColorContrast;
+		all_params[num_params++] = &confMonitorMode[i].ArtificalColorBrightness;
+		all_params[num_params++] = &confMonitorMode[i].BlackLinesTop;
+		all_params[num_params++] = &confMonitorMode[i].BlackLinesBottom;
+		all_params[num_params++] = &confMonitorMode[i].GammaCorrection1;
+		all_params[num_params++] = &confMonitorMode[i].GammaCorrection2;
+		all_params[num_params++] = &confMonitorMode[i].GammaCorrection3;
+		all_params[num_params++] = &confMonitorMode[i].GammaCorrection4;
+		all_params[num_params++] = &confMonitorMode[i].GammaCorrection5;
+	}
+	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
+		all_params[num_params++] = &confVideo[i].PaletteSelection;
+		all_params[num_params++] = &confVideo[i].Type;
+		all_params[num_params++] = &confVideo[i].LinesPerFrame;
+		all_params[num_params++] = &confVideo[i].LinesActiveInCompletePicture;
+		all_params[num_params++] = &confVideo[i].FirstActiveLine;
+		all_params[num_params++] = &confVideo[i].HorizontalTotalLength;
+		all_params[num_params++] = &confVideo[i].HorizontalSyncLength;
+		all_params[num_params++] = &confVideo[i].HorizontalActiveVideoStart;
+		all_params[num_params++] = &confVideo[i].HorizontalActiveVideoLength;
+		all_params[num_params++] = &confVideo[i].VerticalSyncLength;
+		all_params[num_params++] = &confVideo[i].VoltageDac;
+		all_params[num_params++] = &confVideo[i].SyncRgb;
+		all_params[num_params++] = &confVideo[i].AspectRatio;
+	}
+	all_params[num_params++] = &confGraphics.ReferenceLineWidth;
+	all_params[num_params++] = &confGraphics.ReferenceLineLowSpeed;
+	all_params[num_params++] = &confGraphics.ReferenceLineHighSpeed;
+	all_params[num_params++] = &confGraphics.ReferenceLineHighSpeedDelay;
+	all_params[num_params++] = &confGraphics.ReferenceLineSwitchDelay;
+	all_params[num_params++] = &confGraphics.PosNegSpeed;
+	all_params[num_params++] = &confPTZ.LimitUp;
+	all_params[num_params++] = &confPTZ.LimitDown;
+	all_params[num_params++] = &confPTZ.LimitLeft;
+	all_params[num_params++] = &confPTZ.LimitRight;
+	all_params[num_params++] = &confBattery.Type;
+	all_params[num_params++] = &confBattery.NominalCapacity;
+	all_params[num_params++] = &confBattery.TempCoefficientCapacity;
+	all_params[num_params++] = &confBattery.AgeCoefficientCapacity;
+	all_params[num_params++] = &confBattery.LowCapacityLimit;
+	all_params[num_params++] = &confLighting.Intensity;
 }
 
 /**
@@ -178,13 +314,13 @@ void ConfigParam_InitAll(void)
 		const char *string_val;
 		switch (i) {
 		case 0:
-			string_val = "ABCDEFGH12345678";
+			string_val = "999999";
 			break;
 		case 1:
-			string_val = "BCDEFGHI23456789";
+			string_val = "999999";
 			break;
 		case 2:
-			string_val = "CDEFGHIJ34567890";
+			string_val = "999999";
 			break;
 		default:
 			string_val = default_string_data;
@@ -252,8 +388,8 @@ void ConfigParam_InitAll(void)
 		confCameraMode[i].ZoomMax = ConfigParam_Init("ZoomMax", &default_numeric_data, TYPE_16);
 		confCameraMode[i].ZoomSpeed = ConfigParam_Init("ZoomSpeed", &default_numeric_data, TYPE_16);
 		confCameraMode[i].Focus = ConfigParam_Init("Focus", &default_numeric_data, TYPE_32);
-		confCameraMode[i].FocusRangeMin = ConfigParam_Init("FocusRangeMin", &default_numeric_data, TYPE_32);
-		confCameraMode[i].FocusRangeMax = ConfigParam_Init("FocusRangeMax", &default_numeric_data, TYPE_32);
+		confCameraMode[i].FocusMin = ConfigParam_Init("FocusMin", &default_numeric_data, TYPE_32);
+		confCameraMode[i].FocusMax = ConfigParam_Init("FocusMax", &default_numeric_data, TYPE_32);
 		confCameraMode[i].FocusSpeed = ConfigParam_Init("FocusSpeed", &default_numeric_data, TYPE_32);
 		confCameraMode[i].NaturalColorExposure = ConfigParam_Init("NaturalColorExposure", &default_numeric_data, TYPE_32);
 		confCameraMode[i].ArtificialColorExposure = ConfigParam_Init("ArtificialColorExposure", &default_numeric_data, TYPE_32);
@@ -271,6 +407,23 @@ void ConfigParam_InitAll(void)
 		confMonitorMode[i].Contrast = ConfigParam_Init("Contrast", &default_numeric_data, TYPE_8);
 		confMonitorMode[i].Brightness = ConfigParam_Init("Brightness", &default_numeric_data, TYPE_8);
 		confMonitorMode[i].Saturation = ConfigParam_Init("Saturation", &default_numeric_data, TYPE_8);
+		confMonitorMode[i].AutoPosNegEnable = ConfigParam_Init("AutoPosNegEnable", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].AutoPosNegMin = ConfigParam_Init("AutoPosNegMin", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].AutoPosNegMax = ConfigParam_Init("AutoPosNegMax", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].NaturalColorContrast = ConfigParam_Init("NaturalColorContrast", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].NaturalColorBrightnessDefault = ConfigParam_Init("NaturalColorBrightnessDefault", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].NaturalColorBrightnessCoefficient = ConfigParam_Init("NaturalColorBrightnessCoefficient", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].NaturalColorDefault = ConfigParam_Init("NaturalColorDefault", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].NaturalColorCoefficient = ConfigParam_Init("NaturalColorCoefficient", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].ArtificalColorContrast = ConfigParam_Init("ArtificalColorContrast", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].ArtificalColorBrightness = ConfigParam_Init("ArtificalColorBrightness", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].BlackLinesTop = ConfigParam_Init("BlackLinesTop", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].BlackLinesBottom = ConfigParam_Init("BlackLinesBottom", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].GammaCorrection1 = ConfigParam_Init("GammaCorrection1", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].GammaCorrection2 = ConfigParam_Init("GammaCorrection2", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].GammaCorrection3 = ConfigParam_Init("GammaCorrection3", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].GammaCorrection4 = ConfigParam_Init("GammaCorrection4", &default_numeric_data, TYPE_32);
+		confMonitorMode[i].GammaCorrection5 = ConfigParam_Init("GammaCorrection5", &default_numeric_data, TYPE_32);
 	}
 
 	/* INIT VIDEO */
@@ -328,7 +481,8 @@ void ConfigParam_InitAll(void)
 
 	confLighting.name = STRDUP(name);
 	confLighting.Intensity = ConfigParam_Init("Intensity", &default_numeric_data, TYPE_16);
-	// Additional parameters for lighting can be added here
+
+	build_param_list();
 }
 EXPORT_SYMBOL(ConfigParam_InitAll);
 
@@ -348,7 +502,6 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 	char *token;
 	ConfigParam *param = NULL;
 	int index = 0;
-	char *strtok_next_str;
 	char *strsep_current_ptr;
 
 	path_copy = STRDUP(path);
@@ -356,11 +509,9 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 		return NULL;
 	}
 
-	strtok_next_str = path_copy;
 	strsep_current_ptr = path_copy;
 
 	token = strsep(&strsep_current_ptr, ".[]");
-	strtok_next_str = NULL;
 
 	if (!token) {
 		kfree(path_copy);
@@ -473,7 +624,6 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 				param = &confCamera.ArtificialColorIris;
 			else if (strcmp(token, "ArtificialColorExposureCompensation") == 0)
 				param = &confCamera.ArtificialColorExposureCompensation;
-			// Added missing confCamera parameters based on error log
 			else if (strcmp(token, "NaturalColorShutterTime") == 0)
 				param = &confCamera.NaturalColorShutterTime;
 			else if (strcmp(token, "NaturalColorBrightness") == 0)
@@ -516,10 +666,10 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 						param = &confCameraMode[index].ZoomSpeed;
 					else if (strcmp(token, "Focus") == 0)
 						param = &confCameraMode[index].Focus;
-					else if (strcmp(token, "FocusRangeMin") == 0)
-						param = &confCameraMode[index].FocusRangeMin;
-					else if (strcmp(token, "FocusRangeMax") == 0)
-						param = &confCameraMode[index].FocusRangeMax;
+					else if (strcmp(token, "FocusMin") == 0)
+						param = &confCameraMode[index].FocusMin;
+					else if (strcmp(token, "FocusMax") == 0)
+						param = &confCameraMode[index].FocusMax;
 					else if (strcmp(token, "FocusSpeed") == 0)
 						param = &confCameraMode[index].FocusSpeed;
 					else if (strcmp(token, "NaturalColorExposure") == 0)
@@ -559,6 +709,40 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 						param = &confMonitorMode[index].Brightness;
 					else if (strcmp(token, "Saturation") == 0)
 						param = &confMonitorMode[index].Saturation;
+					else if (strcmp(token, "AutoPosNegEnable") == 0)
+						param = &confMonitorMode[index].AutoPosNegEnable;
+					else if (strcmp(token, "AutoPosNegMin") == 0)
+						param = &confMonitorMode[index].AutoPosNegMin;
+					else if (strcmp(token, "AutoPosNegMax") == 0)
+						param = &confMonitorMode[index].AutoPosNegMax;
+					else if (strcmp(token, "NaturalColorContrast") == 0)
+						param = &confMonitorMode[index].NaturalColorContrast;
+					else if (strcmp(token, "NaturalColorBrightnessDefault") == 0)
+						param = &confMonitorMode[index].NaturalColorBrightnessDefault;
+					else if (strcmp(token, "NaturalColorBrightnessCoefficient") == 0)
+						param = &confMonitorMode[index].NaturalColorBrightnessCoefficient;
+					else if (strcmp(token, "NaturalColorDefault") == 0)
+						param = &confMonitorMode[index].NaturalColorDefault;
+					else if (strcmp(token, "NaturalColorCoefficient") == 0)
+						param = &confMonitorMode[index].NaturalColorCoefficient;
+					else if (strcmp(token, "ArtificalColorContrast") == 0)
+						param = &confMonitorMode[index].ArtificalColorContrast;
+					else if (strcmp(token, "ArtificalColorBrightness") == 0)
+						param = &confMonitorMode[index].ArtificalColorBrightness;
+					else if (strcmp(token, "BlackLinesTop") == 0)
+						param = &confMonitorMode[index].BlackLinesTop;
+					else if (strcmp(token, "BlackLinesBottom") == 0)
+						param = &confMonitorMode[index].BlackLinesBottom;
+					else if (strcmp(token, "GammaCorrection1") == 0)
+						param = &confMonitorMode[index].GammaCorrection1;
+					else if (strcmp(token, "GammaCorrection2") == 0)
+						param = &confMonitorMode[index].GammaCorrection2;
+					else if (strcmp(token, "GammaCorrection3") == 0)
+						param = &confMonitorMode[index].GammaCorrection3;
+					else if (strcmp(token, "GammaCorrection4") == 0)
+						param = &confMonitorMode[index].GammaCorrection4;
+					else if (strcmp(token, "GammaCorrection5") == 0)
+						param = &confMonitorMode[index].GammaCorrection5;
 				}
 			}
 		}
@@ -694,75 +878,54 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 	kfree(path_copy);
 	return param;
 }
+EXPORT_SYMBOL(ConfigParam_FindByName);
 
 /**
- * @brief Set the parameter's data and write the data to EEPROM on the corresponding parameter EEPROM address.
- * Reads current EEPROM data first and only writes bytes that differ to reduce EEPROM wear.
+ * @brief Set the parameter's data and write the data to EEPROM on the corresponding parameter EEPROM address
  * @param param: Parameter to be altered
  * @param data: Data to be written to parameter's data variable
  */
-void ConfigParam_SetData(ConfigParam *param, const void *data)
+void ConfigParam_SetData(ConfigParam *param, const void *data, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t))
 {
 	uint8_t i;
 	uint8_t *new_data;
 	uint8_t eeprom_byte;
 	int needs_write;
 
-	if (!param || !param->data || !data)
+	if (!param || !param->data || !data) {
+		pr_err("ConfigParam_SetData: Invalid parameter or data\n");
 		return;
+	}
 
-	/* Allocate temporary buffer for new data */
 	new_data = (uint8_t *)kmalloc(param->size, GFP_KERNEL);
 	if (!new_data)
 		return;
 
-	/* Convert input data to byte array based on type */
-	switch (param->type) {
-	case TYPE_8:
-		memcpy(new_data, data, param->size);
-		break;
-	case TYPE_16:
-		new_data[0] = ((uint16_t *)data)[0] & 0xFF;
-		new_data[1] = (((uint16_t *)data)[0] >> 8) & 0xFF;
-		break;
-	case TYPE_32:
-		new_data[0] = ((uint32_t *)data)[0] & 0xFF;
-		new_data[1] = (((uint32_t *)data)[0] >> 8) & 0xFF;
-		new_data[2] = (((uint32_t *)data)[0] >> 16) & 0xFF;
-		new_data[3] = (((uint32_t *)data)[0] >> 24) & 0xFF;
-		break;
-	case TYPE_ARRAY:
-		memcpy(new_data, data, param->size);
-		break;
-	case TYPE_STRING:
-		strncpy((char *)new_data, (const char *)data, param->size - 1);
-		new_data[param->size - 1] = '\0';
-		break;
-	default:
+	if (serialize_data(new_data, data, param->type, param->size) != 0) {
 		kfree(new_data);
 		return;
 	}
 
-	/* Read EEPROM and write only bytes that differ */
 	for (i = 0; i < param->size; i++) {
 		needs_write = 1;
-		if (lviconfig_platform_eeprom_read(param->address + i, &eeprom_byte) == 0) {
+
+		if (platform_eeprom_read(param->address + i, &eeprom_byte) == 0) {
 			if (eeprom_byte == new_data[i]) {
 				needs_write = 0; /* Data matches, skip write */
 			}
 		}
+
 		if (needs_write) {
-			if (lviconfig_platform_eeprom_write(param->address + i, new_data[i]) != 0) {
-				pr_err("[%s]: Failed to write byte %u of param %s\n",
-				       __func__, i, param->name ? param->name : "UNKNOWN");
+			if (platform_eeprom_write(param->address + i, new_data[i]) != 0) {
+				pr_err("[%s]: Failed to write byte %u of param %s\n", __func__, i, param->name ? param->name : "UNKNOWN");
 			}
 		}
 	}
 
-	/* Update param->data with the new data */
 	memcpy(param->data, new_data, param->size);
 	kfree(new_data);
 }
+EXPORT_SYMBOL(ConfigParam_SetData);
 
 /**
  * @brief Reads the data from the EEPROM for a given ConfigParam.
@@ -770,7 +933,7 @@ void ConfigParam_SetData(ConfigParam *param, const void *data)
  * @param param: The ConfigParam to read data from.
  * @return: Pointer to the data if successful, NULL if there was an error.
  */
-const void *ConfigParam_GetData(ConfigParam *param)
+const void *ConfigParam_GetData(ConfigParam *param, int (*platform_eeprom_read)(uint32_t, uint8_t *))
 {
 	uint8_t read_success;
 	uint8_t i;
@@ -780,7 +943,7 @@ const void *ConfigParam_GetData(ConfigParam *param)
 
 	read_success = 1;
 	for (i = 0; i < param->size; i++) {
-		if (lviconfig_platform_eeprom_read(param->address + i, &param->data[i]) != 0) {
+		if (platform_eeprom_read(param->address + i, &param->data[i]) != 0) {
 			read_success = 0;
 			break;
 		}
@@ -791,6 +954,7 @@ const void *ConfigParam_GetData(ConfigParam *param)
 	}
 	return (const void *)param->data;
 }
+EXPORT_SYMBOL(ConfigParam_GetData);
 
 /**
  * @brief Parses the EEPROM to load configuration parameters.
@@ -800,125 +964,12 @@ const void *ConfigParam_GetData(ConfigParam *param)
  * This function MUST be called AFTER the ConfigParam_InitAll() function
  * to ensure that all parameters are initialized before reading from EEPROM.
  */
-void ConfigParam_ParseEEPROM(void)
+void ConfigParam_ParseEEPROM(int (*platform_eeprom_read)(uint32_t, uint8_t *))
 {
-	uint8_t i;
+	size_t i;
 
-	// confProductId
-	ConfigParam_GetData(&confProductId);
-
-	// confFactoryDefaultVersion
-	ConfigParam_GetData(&confFactoryDefaultVersion);
-
-	// confLicenseKey
-	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++) {
-		ConfigParam_GetData(&confLicenseKey[i]);
-	}
-
-	// confFunctions
-	ConfigParam_GetData(&confFunctions.Seesaw);
-	ConfigParam_GetData(&confFunctions.ReferenceLine);
-	ConfigParam_GetData(&confFunctions.Curtain);
-
-	// confColor
-	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
-		ConfigParam_GetData(&confColor[i].Group);
-		ConfigParam_GetData(&confColor[i].ArtificialColorPoint1);
-		ConfigParam_GetData(&confColor[i].ArtificialColorPoint2);
-		ConfigParam_GetData(&confColor[i].ArtificialColorPoint3);
-		ConfigParam_GetData(&confColor[i].ArtificialColorPoint4);
-		ConfigParam_GetData(&confColor[i].CameraBackground);
-		ConfigParam_GetData(&confColor[i].ReferenceLine);
-		ConfigParam_GetData(&confColor[i].Restricted);
-	}
-
-	// confCamera
-	ConfigParam_GetData(&confCamera.Type);
-	ConfigParam_GetData(&confCamera.RGain);
-	ConfigParam_GetData(&confCamera.BGain);
-	ConfigParam_GetData(&confCamera.FirstLine);
-	ConfigParam_GetData(&confCamera.FirstPixel);
-	ConfigParam_GetData(&confCamera.UsableLines);
-	ConfigParam_GetData(&confCamera.UsablePixels);
-	ConfigParam_GetData(&confCamera.UsableRatio);
-	ConfigParam_GetData(&confCamera.Interface);
-	ConfigParam_GetData(&confCamera.NaturalColorShutterTime);
-	ConfigParam_GetData(&confCamera.NaturalColorBrightness);
-	ConfigParam_GetData(&confCamera.NaturalColorIris);
-	ConfigParam_GetData(&confCamera.NaturalColorExposureCompensation);
-	ConfigParam_GetData(&confCamera.NaturalColorGainPeak);
-	ConfigParam_GetData(&confCamera.ArtificialColorShutterTime);
-	ConfigParam_GetData(&confCamera.ArtificialColorBrightness);
-	ConfigParam_GetData(&confCamera.ArtificialColorIris);
-	ConfigParam_GetData(&confCamera.ArtificialColorExposureCompensation);
-	ConfigParam_GetData(&confCamera.ArtificialColorGainPeak);
-
-	// confCameraMode
-	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
-		ConfigParam_GetData(&confCameraMode[i].Zoom);
-		ConfigParam_GetData(&confCameraMode[i].ZoomMin);
-		ConfigParam_GetData(&confCameraMode[i].ZoomMax);
-		ConfigParam_GetData(&confCameraMode[i].ZoomSpeed);
-		ConfigParam_GetData(&confCameraMode[i].Focus);
-		ConfigParam_GetData(&confCameraMode[i].FocusRangeMin);
-		ConfigParam_GetData(&confCameraMode[i].FocusRangeMax);
-		ConfigParam_GetData(&confCameraMode[i].FocusSpeed);
-		ConfigParam_GetData(&confCameraMode[i].NaturalColorExposure);
-		ConfigParam_GetData(&confCameraMode[i].ArtificialColorExposure);
-		ConfigParam_GetData(&confCameraMode[i].WhiteBalance);
-	}
-
-	// confMonitorMode
-	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
-		ConfigParam_GetData(&confMonitorMode[i].ColorGainR);
-		ConfigParam_GetData(&confMonitorMode[i].ColorGainG);
-		ConfigParam_GetData(&confMonitorMode[i].ColorGainB);
-		ConfigParam_GetData(&confMonitorMode[i].Contrast);
-		ConfigParam_GetData(&confMonitorMode[i].Brightness);
-		ConfigParam_GetData(&confMonitorMode[i].Saturation);
-	}
-
-	// confVideo
-	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
-		ConfigParam_GetData(&confVideo[i].PaletteSelection);
-		ConfigParam_GetData(&confVideo[i].Type);
-		ConfigParam_GetData(&confVideo[i].LinesPerFrame);
-		ConfigParam_GetData(&confVideo[i].LinesActiveInCompletePicture);
-		ConfigParam_GetData(&confVideo[i].FirstActiveLine);
-		ConfigParam_GetData(&confVideo[i].HorizontalTotalLength);
-		ConfigParam_GetData(&confVideo[i].HorizontalSyncLength);
-		ConfigParam_GetData(&confVideo[i].HorizontalActiveVideoStart);
-		ConfigParam_GetData(&confVideo[i].HorizontalActiveVideoLength);
-		ConfigParam_GetData(&confVideo[i].VerticalSyncLength);
-		ConfigParam_GetData(&confVideo[i].VoltageDac);
-		ConfigParam_GetData(&confVideo[i].SyncRgb);
-		ConfigParam_GetData(&confVideo[i].AspectRatio);
-	}
-
-	// confGraphics
-	ConfigParam_GetData(&confGraphics.ReferenceLineWidth);
-	ConfigParam_GetData(&confGraphics.ReferenceLineLowSpeed);
-	ConfigParam_GetData(&confGraphics.ReferenceLineHighSpeed);
-	ConfigParam_GetData(&confGraphics.ReferenceLineHighSpeedDelay);
-	ConfigParam_GetData(&confGraphics.ReferenceLineSwitchDelay);
-	ConfigParam_GetData(&confGraphics.PosNegSpeed);
-
-	// confPTZ
-	ConfigParam_GetData(&confPTZ.LimitUp);
-	ConfigParam_GetData(&confPTZ.LimitDown);
-	ConfigParam_GetData(&confPTZ.LimitLeft);
-	ConfigParam_GetData(&confPTZ.LimitRight);
-
-	// confBattery
-	ConfigParam_GetData(&confBattery.Type);
-	ConfigParam_GetData(&confBattery.NominalCapacity);
-	ConfigParam_GetData(&confBattery.TempCoefficientCapacity);
-	ConfigParam_GetData(&confBattery.AgeCoefficientCapacity);
-	ConfigParam_GetData(&confBattery.LowCapacityLimit);
-
-	// confLighting
-	ConfigParam_GetData(&confLighting.Intensity);
-	// Additional parameters for lighting can be added here
+	for (i = 0; i < num_params; i++)
+		ConfigParam_GetData(all_params[i], platform_eeprom_read);
 }
 EXPORT_SYMBOL(ConfigParam_ParseEEPROM);
 
@@ -929,7 +980,7 @@ EXPORT_SYMBOL(ConfigParam_ParseEEPROM);
  * 
  * @param param: The ConfigParam to print.
  */
-void ConfigParam_PrintParam(ConfigParam *param)
+void ConfigParam_PrintParam(ConfigParam *param, int (*platform_eeprom_read)(uint32_t, uint8_t *))
 {
 	const void *data;
 	const int name_width = 36; // Consistent with user-space for padding
@@ -946,7 +997,7 @@ void ConfigParam_PrintParam(ConfigParam *param)
 		// Still try to print what we can if data is available
 	}
 
-	data = ConfigParam_GetData(param); // Reads from EEPROM
+	data = ConfigParam_GetData(param, platform_eeprom_read); // Reads from EEPROM
 	if (!data) {
 		pr_info("[%s] No data for %s (Addr: 0x%04X)\n", __func__, param->name ? param->name : "UNKNOWN", param->address);
 		return;
@@ -1000,146 +1051,27 @@ void ConfigParam_PrintParam(ConfigParam *param)
  * This function iterates through all configuration parameters and prints
  * their details using ConfigParam_PrintParam.
  */
-void ConfigParam_PrintAll(void)
+void ConfigParam_PrintAll(int (*platform_eeprom_read)(uint32_t, uint8_t *))
 {
-	int i;
+	size_t i;
 
 	pr_info("[%s] --- All Configuration Parameters (Kernel) ---\n", __func__);
-
-	// confProductId
-	pr_info("[%s] --- ProductID (%s) ---\n", __func__, confProductId.name ? confProductId.name : "N/A");
-	ConfigParam_PrintParam(&confProductId);
-
-	// confFactoryDefaultVersion
-	pr_info("[%s] --- FactoryDefaultVersion (%s) ---\n", __func__, confFactoryDefaultVersion.name ? confFactoryDefaultVersion.name : "N/A");
-	ConfigParam_PrintParam(&confFactoryDefaultVersion);
-
-	// confLicenseKey
-	pr_info("[%s] --- LicenseKey ---\n", __func__);
-	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++) {
-		ConfigParam_PrintParam(&confLicenseKey[i]);
-	}
-
-	// confFunctions
-	pr_info("[%s] --- Functions (%s) ---\n", __func__, confFunctions.name ? confFunctions.name : "N/A");
-	ConfigParam_PrintParam(&confFunctions.Seesaw);
-	ConfigParam_PrintParam(&confFunctions.ReferenceLine);
-	ConfigParam_PrintParam(&confFunctions.Curtain);
-
-	// confColor
-	pr_info("[%s] --- Color Profiles (confColor) ---\n", __func__);
-	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
-		pr_info("[%s]   -- Color Profile [%d] (%s) --\n", __func__, i, confColor[i].name ? confColor[i].name : "N/A");
-		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint1);
-		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint2);
-		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint3);
-		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint4);
-		ConfigParam_PrintParam(&confColor[i].CameraBackground);
-		ConfigParam_PrintParam(&confColor[i].ReferenceLine);
-		ConfigParam_PrintParam(&confColor[i].Restricted);
-	}
-
-	// confCamera
-	pr_info("[%s] --- Camera (%s) ---\n", __func__, confCamera.name ? confCamera.name : "N/A");
-	ConfigParam_PrintParam(&confCamera.Type);
-	ConfigParam_PrintParam(&confCamera.RGain);
-	ConfigParam_PrintParam(&confCamera.BGain);
-	ConfigParam_PrintParam(&confCamera.FirstLine);
-	ConfigParam_PrintParam(&confCamera.UsableLines);
-	ConfigParam_PrintParam(&confCamera.FirstPixel);
-	ConfigParam_PrintParam(&confCamera.UsablePixels);
-	ConfigParam_PrintParam(&confCamera.UsableRatio);
-	ConfigParam_PrintParam(&confCamera.Interface);
-	ConfigParam_PrintParam(&confCamera.ArtificialColorShutterTime);
-	ConfigParam_PrintParam(&confCamera.ArtificialColorBrightness);
-	ConfigParam_PrintParam(&confCamera.ArtificialColorIris);
-	ConfigParam_PrintParam(&confCamera.ArtificialColorExposureCompensation);
-	ConfigParam_PrintParam(&confCamera.NaturalColorShutterTime);
-	ConfigParam_PrintParam(&confCamera.NaturalColorBrightness);
-	ConfigParam_PrintParam(&confCamera.NaturalColorIris);
-	ConfigParam_PrintParam(&confCamera.NaturalColorExposureCompensation);
-	ConfigParam_PrintParam(&confCamera.NaturalColorGainPeak);
-	ConfigParam_PrintParam(&confCamera.ArtificialColorGainPeak);
-
-	// confCameraMode
-	pr_info("[%s] --- Camera Modes (confCameraMode) ---\n", __func__);
-	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
-		pr_info("[%s]   -- Camera Mode [%d] (%s) --\n", __func__, i, confCameraMode[i].name ? confCameraMode[i].name : "N/A");
-		ConfigParam_PrintParam(&confCameraMode[i].Zoom);
-		ConfigParam_PrintParam(&confCameraMode[i].ZoomMin);
-		ConfigParam_PrintParam(&confCameraMode[i].ZoomMax);
-		ConfigParam_PrintParam(&confCameraMode[i].ZoomSpeed);
-		ConfigParam_PrintParam(&confCameraMode[i].Focus);
-		ConfigParam_PrintParam(&confCameraMode[i].FocusRangeMin);
-		ConfigParam_PrintParam(&confCameraMode[i].FocusRangeMax);
-		ConfigParam_PrintParam(&confCameraMode[i].FocusSpeed);
-		ConfigParam_PrintParam(&confCameraMode[i].NaturalColorExposure);
-		ConfigParam_PrintParam(&confCameraMode[i].ArtificialColorExposure);
-		ConfigParam_PrintParam(&confCameraMode[i].WhiteBalance);
-	}
-
-	// confMonitorMode
-	pr_info("[%s] --- Monitor Modes (confMonitorMode) ---\n", __func__);
-	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
-		pr_info("[%s]   -- Monitor Mode [%d] (%s) --\n", __func__, i, confMonitorMode[i].name ? confMonitorMode[i].name : "N/A");
-		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainR);
-		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainG);
-		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainB);
-		ConfigParam_PrintParam(&confMonitorMode[i].Contrast);
-		ConfigParam_PrintParam(&confMonitorMode[i].Brightness);
-		ConfigParam_PrintParam(&confMonitorMode[i].Saturation);
-	}
-
-	// confVideo
-	pr_info("[%s] --- Video Settings (confVideo) ---\n", __func__);
-	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
-		pr_info("[%s]   -- Video Setting [%d] (%s) --\n", __func__, i, confVideo[i].name ? confVideo[i].name : "N/A");
-		ConfigParam_PrintParam(&confVideo[i].PaletteSelection);
-		ConfigParam_PrintParam(&confVideo[i].Type);
-		ConfigParam_PrintParam(&confVideo[i].LinesPerFrame);
-		ConfigParam_PrintParam(&confVideo[i].LinesActiveInCompletePicture);
-		ConfigParam_PrintParam(&confVideo[i].FirstActiveLine);
-		ConfigParam_PrintParam(&confVideo[i].HorizontalTotalLength);
-		ConfigParam_PrintParam(&confVideo[i].HorizontalSyncLength);
-		ConfigParam_PrintParam(&confVideo[i].HorizontalActiveVideoStart);
-		ConfigParam_PrintParam(&confVideo[i].HorizontalActiveVideoLength);
-		ConfigParam_PrintParam(&confVideo[i].VerticalSyncLength);
-		ConfigParam_PrintParam(&confVideo[i].VoltageDac);
-		ConfigParam_PrintParam(&confVideo[i].SyncRgb);
-		ConfigParam_PrintParam(&confVideo[i].AspectRatio);
-	}
-
-	// confGraphics
-	pr_info("[%s] --- Graphics (%s) ---\n", __func__, confGraphics.name ? confGraphics.name : "N/A");
-	ConfigParam_PrintParam(&confGraphics.ReferenceLineWidth);
-	ConfigParam_PrintParam(&confGraphics.ReferenceLineLowSpeed);
-	ConfigParam_PrintParam(&confGraphics.ReferenceLineHighSpeed);
-	ConfigParam_PrintParam(&confGraphics.ReferenceLineHighSpeedDelay);
-	ConfigParam_PrintParam(&confGraphics.ReferenceLineSwitchDelay);
-	ConfigParam_PrintParam(&confGraphics.PosNegSpeed);
-
-	// confPTZ
-	pr_info("[%s] --- PTZ (%s) ---\n", __func__, confPTZ.name ? confPTZ.name : "N/A");
-	ConfigParam_PrintParam(&confPTZ.LimitUp);
-	ConfigParam_PrintParam(&confPTZ.LimitDown);
-	ConfigParam_PrintParam(&confPTZ.LimitLeft);
-	ConfigParam_PrintParam(&confPTZ.LimitRight);
-
-	// confBattery
-	pr_info("[%s] --- Battery (%s) ---\n", __func__, confBattery.name ? confBattery.name : "N/A");
-	ConfigParam_PrintParam(&confBattery.Type);
-	ConfigParam_PrintParam(&confBattery.NominalCapacity);
-	ConfigParam_PrintParam(&confBattery.TempCoefficientCapacity);
-	ConfigParam_PrintParam(&confBattery.AgeCoefficientCapacity);
-	ConfigParam_PrintParam(&confBattery.LowCapacityLimit);
-
-	// confLighting
-	pr_info("[%s] --- Lighting (%s) ---\n", __func__, confLighting.name ? confLighting.name : "N/A");
-	ConfigParam_PrintParam(&confLighting.Intensity);
-	// Additional parameters for lighting can be added here
-
+	for (i = 0; i < num_params; i++)
+		ConfigParam_PrintParam(all_params[i], platform_eeprom_read);
 	pr_info("[%s] --- End of Configuration Parameters (Kernel) ---\n", __func__);
 }
+
+int ConfigParam_IsInitialized(void)
+{
+	return lviconfig_initialized;
+}
+EXPORT_SYMBOL(ConfigParam_IsInitialized);
+
+void ConfigParam_MarkInitialized(void)
+{
+	lviconfig_initialized = 1;
+}
+EXPORT_SYMBOL(ConfigParam_MarkInitialized);
 
 /**
  * @brief Save a single parameter to EEPROM if it differs from EEPROM contents.
@@ -1147,7 +1079,7 @@ void ConfigParam_PrintAll(void)
  * @param param: Parameter to save
  * @return: 1 if parameter was written, 0 if no write needed, negative on error
  */
-int ConfigParam_SaveParam(ConfigParam *param)
+int ConfigParam_ReadAndSaveParam(ConfigParam *param, uint8_t save, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t))
 {
 	uint8_t i;
 	uint8_t eeprom_byte;
@@ -1159,169 +1091,52 @@ int ConfigParam_SaveParam(ConfigParam *param)
 
 	for (i = 0; i < param->size; i++) {
 		needs_write = 1;
-		if (lviconfig_platform_eeprom_read(param->address + i, &eeprom_byte) == 0) {
+		if (platform_eeprom_read(param->address + i, &eeprom_byte) == 0) {
 			if (eeprom_byte == param->data[i]) {
 				needs_write = 0; /* Data matches, skip write */
 			}
 		}
-		if (needs_write) {
-			if (lviconfig_platform_eeprom_write(param->address + i, param->data[i]) != 0) {
-				pr_err("[%s]: Failed to write byte %u of param %s\n",
-				       __func__, i, param->name ? param->name : "UNKNOWN");
+		if (needs_write && save) {
+			if (platform_eeprom_write(param->address + i, param->data[i]) != 0) {
+				pr_err("[%s]: Failed to write byte %u of param %s\n", __func__, i, param->name ? param->name : "UNKNOWN");
 				return -EIO;
 			}
 			wrote_any = 1;
 		}
 	}
 
-	if (wrote_any) {
-		pr_info("[%s]: Wrote param %s (addr=0x%04X, size=%u)\n",
-			__func__, param->name ? param->name : "UNKNOWN",
-			param->address, param->size);
+	if (wrote_any && save) {
+		pr_info("[%s]: Wrote param %s (addr=0x%04X, size=%u)\n", __func__, param->name ? param->name : "UNKNOWN", param->address, param->size);
 	}
 
 	return wrote_any;
 }
-EXPORT_SYMBOL(ConfigParam_SaveParam);
 
 /**
  * @brief Save all configuration parameters to EEPROM.
  * Only writes parameters that differ from current EEPROM contents.
  * @return: Number of parameters that were written, or negative error code
  */
-int ConfigParam_SaveAll(void)
+int ConfigParam_ReadAndSaveAll(uint8_t save, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t))
 {
-	uint8_t i;
+	size_t i;
 	int ret;
 	int total_written = 0;
 
-	/* Helper macro to save param and track count */
-	#define SAVE_AND_COUNT(p) do { \
-		ret = ConfigParam_SaveParam(p); \
-		if (ret < 0) return ret; \
-		total_written += ret; \
-	} while (0)
-
 	pr_info("[%s]: Starting save of all configuration parameters\n", __func__);
 
-	/* confProductId */
-	SAVE_AND_COUNT(&confProductId);
-	
-	/* confFactoryDefaultVersion */
-	SAVE_AND_COUNT(&confFactoryDefaultVersion);
-
-	/* confLicenseKey */
-	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++) {
-		SAVE_AND_COUNT(&confLicenseKey[i]);
+	for (i = 0; i < num_params; i++) {
+		ret = ConfigParam_ReadAndSaveParam(all_params[i], save, platform_eeprom_read, platform_eeprom_write);
+		if (ret < 0)
+			return ret;
+		total_written += ret;
 	}
-
-	/* confFunctions */
-	SAVE_AND_COUNT(&confFunctions.Seesaw);
-	SAVE_AND_COUNT(&confFunctions.ReferenceLine);
-	SAVE_AND_COUNT(&confFunctions.Curtain);
-
-	/* confColor */
-	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
-		SAVE_AND_COUNT(&confColor[i].Group);
-		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint1);
-		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint2);
-		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint3);
-		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint4);
-		SAVE_AND_COUNT(&confColor[i].CameraBackground);
-		SAVE_AND_COUNT(&confColor[i].ReferenceLine);
-		SAVE_AND_COUNT(&confColor[i].Restricted);
-	}
-
-	/* confCamera */
-	SAVE_AND_COUNT(&confCamera.Type);
-	SAVE_AND_COUNT(&confCamera.RGain);
-	SAVE_AND_COUNT(&confCamera.BGain);
-	SAVE_AND_COUNT(&confCamera.FirstLine);
-	SAVE_AND_COUNT(&confCamera.FirstPixel);
-	SAVE_AND_COUNT(&confCamera.UsableLines);
-	SAVE_AND_COUNT(&confCamera.UsablePixels);
-	SAVE_AND_COUNT(&confCamera.UsableRatio);
-	SAVE_AND_COUNT(&confCamera.Interface);
-	SAVE_AND_COUNT(&confCamera.NaturalColorShutterTime);
-	SAVE_AND_COUNT(&confCamera.NaturalColorBrightness);
-	SAVE_AND_COUNT(&confCamera.NaturalColorIris);
-	SAVE_AND_COUNT(&confCamera.NaturalColorExposureCompensation);
-	SAVE_AND_COUNT(&confCamera.NaturalColorGainPeak);
-	SAVE_AND_COUNT(&confCamera.ArtificialColorShutterTime);
-	SAVE_AND_COUNT(&confCamera.ArtificialColorBrightness);
-	SAVE_AND_COUNT(&confCamera.ArtificialColorIris);
-	SAVE_AND_COUNT(&confCamera.ArtificialColorExposureCompensation);
-	SAVE_AND_COUNT(&confCamera.ArtificialColorGainPeak);
-
-	/* confCameraMode */
-	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
-		SAVE_AND_COUNT(&confCameraMode[i].Zoom);
-		SAVE_AND_COUNT(&confCameraMode[i].ZoomMin);
-		SAVE_AND_COUNT(&confCameraMode[i].ZoomMax);
-		SAVE_AND_COUNT(&confCameraMode[i].ZoomSpeed);
-		SAVE_AND_COUNT(&confCameraMode[i].Focus);
-		SAVE_AND_COUNT(&confCameraMode[i].FocusRangeMin);
-		SAVE_AND_COUNT(&confCameraMode[i].FocusRangeMax);
-		SAVE_AND_COUNT(&confCameraMode[i].FocusSpeed);
-		SAVE_AND_COUNT(&confCameraMode[i].NaturalColorExposure);
-		SAVE_AND_COUNT(&confCameraMode[i].ArtificialColorExposure);
-		SAVE_AND_COUNT(&confCameraMode[i].WhiteBalance);
-	}
-
-	/* confMonitorMode */
-	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
-		SAVE_AND_COUNT(&confMonitorMode[i].ColorGainR);
-		SAVE_AND_COUNT(&confMonitorMode[i].ColorGainG);
-		SAVE_AND_COUNT(&confMonitorMode[i].ColorGainB);
-		SAVE_AND_COUNT(&confMonitorMode[i].Contrast);
-		SAVE_AND_COUNT(&confMonitorMode[i].Brightness);
-		SAVE_AND_COUNT(&confMonitorMode[i].Saturation);
-	}
-
-	/* confVideo */
-	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
-		SAVE_AND_COUNT(&confVideo[i].PaletteSelection);
-		SAVE_AND_COUNT(&confVideo[i].Type);
-		SAVE_AND_COUNT(&confVideo[i].LinesPerFrame);
-		SAVE_AND_COUNT(&confVideo[i].LinesActiveInCompletePicture);
-		SAVE_AND_COUNT(&confVideo[i].FirstActiveLine);
-		SAVE_AND_COUNT(&confVideo[i].HorizontalTotalLength);
-		SAVE_AND_COUNT(&confVideo[i].HorizontalSyncLength);
-		SAVE_AND_COUNT(&confVideo[i].HorizontalActiveVideoStart);
-		SAVE_AND_COUNT(&confVideo[i].HorizontalActiveVideoLength);
-		SAVE_AND_COUNT(&confVideo[i].VerticalSyncLength);
-		SAVE_AND_COUNT(&confVideo[i].VoltageDac);
-		SAVE_AND_COUNT(&confVideo[i].SyncRgb);
-		SAVE_AND_COUNT(&confVideo[i].AspectRatio);
-	}
-
-	/* confGraphics */
-	SAVE_AND_COUNT(&confGraphics.ReferenceLineWidth);
-	SAVE_AND_COUNT(&confGraphics.ReferenceLineLowSpeed);
-	SAVE_AND_COUNT(&confGraphics.ReferenceLineHighSpeed);
-	SAVE_AND_COUNT(&confGraphics.ReferenceLineHighSpeedDelay);
-	SAVE_AND_COUNT(&confGraphics.ReferenceLineSwitchDelay);
-	SAVE_AND_COUNT(&confGraphics.PosNegSpeed);
-
-	/* confPTZ */
-	SAVE_AND_COUNT(&confPTZ.LimitUp);
-	SAVE_AND_COUNT(&confPTZ.LimitDown);
-	SAVE_AND_COUNT(&confPTZ.LimitLeft);
-	SAVE_AND_COUNT(&confPTZ.LimitRight);
-	
-	/* confBattery */
-	SAVE_AND_COUNT(&confBattery.Type);
-	SAVE_AND_COUNT(&confBattery.NominalCapacity);
-	SAVE_AND_COUNT(&confBattery.TempCoefficientCapacity);	
-	SAVE_AND_COUNT(&confBattery.AgeCoefficientCapacity);
-	SAVE_AND_COUNT(&confBattery.LowCapacityLimit);
-	
-	/* confLighting */
-	SAVE_AND_COUNT(&confLighting.Intensity);
-
-	#undef SAVE_AND_COUNT
 
 	pr_info("[%s]: Save complete. %d parameters needed writing\n", __func__, total_written);
 	return total_written;
 }
-EXPORT_SYMBOL(ConfigParam_SaveAll);
+EXPORT_SYMBOL(ConfigParam_ReadAndSaveAll);
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Max Borglowe");
+MODULE_DESCRIPTION("LVI Config Parameters Library ultra");
