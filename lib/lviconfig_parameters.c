@@ -59,6 +59,46 @@ EXPORT_SYMBOL(confPTZ);
 EXPORT_SYMBOL(confBattery);
 EXPORT_SYMBOL(confLighting);
 
+/* Flat list of all ConfigParam pointers, built by build_param_list() at end of ConfigParam_InitAll.
+ * Used by ConfigParam_ParseEEPROM and ConfigParam_ReadAndSaveAll to avoid enumerating params in 3 places.
+ */
+#define ALL_PARAMS_MAX 350
+static ConfigParam *all_params[ALL_PARAMS_MAX];
+static size_t num_params;
+
+/**
+ * @brief Serialize src into dst according to type (little-endian).
+ * @return 0 on success, -1 for unknown type.
+ */
+static int serialize_data(uint8_t *dst, const void *src, DataType type, uint8_t size)
+{
+	switch (type) {
+	case TYPE_8:
+		memcpy(dst, src, size);
+		break;
+	case TYPE_16:
+		dst[0] = ((const uint16_t *)src)[0] & 0xFF;
+		dst[1] = (((const uint16_t *)src)[0] >> 8) & 0xFF;
+		break;
+	case TYPE_32:
+		dst[0] = ((const uint32_t *)src)[0] & 0xFF;
+		dst[1] = (((const uint32_t *)src)[0] >> 8) & 0xFF;
+		dst[2] = (((const uint32_t *)src)[0] >> 16) & 0xFF;
+		dst[3] = (((const uint32_t *)src)[0] >> 24) & 0xFF;
+		break;
+	case TYPE_ARRAY:
+		memcpy(dst, src, size);
+		break;
+	case TYPE_STRING:
+		strncpy((char *)dst, (const char *)src, size - 1);
+		dst[size - 1] = '\0';
+		break;
+	default:
+		return -1;
+	}
+	return 0;
+}
+
 /**
  * @brief Initialize a configuration parameter.
  * This function initializes a ConfigParam structure with the given name,
@@ -121,37 +161,131 @@ ConfigParam ConfigParam_Init(const char *name_str, const void *data, DataType ty
 		return param;
 	}
 
-	if (data) {
-		switch (type) {
-		case TYPE_8:
-			memcpy(param.data, data, param.size);
-			break;
-		case TYPE_16:
-			param.data[0] = ((uint16_t *)data)[0] & 0xFF;
-			param.data[1] = (((uint16_t *)data)[0] >> 8) & 0xFF;
-			break;
-		case TYPE_32:
-			param.data[0] = ((uint32_t *)data)[0] & 0xFF;
-			param.data[1] = (((uint32_t *)data)[0] >> 8) & 0xFF;
-			param.data[2] = (((uint32_t *)data)[0] >> 16) & 0xFF;
-			param.data[3] = (((uint32_t *)data)[0] >> 24) & 0xFF;
-			break;
-		case TYPE_ARRAY:
-			memcpy(param.data, data, param.size);
-			break;
-		case TYPE_STRING:
-			strncpy((char *)param.data, (const char *)data, param.size - 1);
-			param.data[param.size - 1] = '\0';
-			break;
-		default:
-			break;
-		}
-	} else {
+	if (data)
+		serialize_data(param.data, data, type, param.size);
+	else
 		memset(param.data, 0, param.size);
-	}
 
 	addr += param.size;
 	return param;
+}
+
+/**
+ * @brief Build the flat all_params[] list from all initialized ConfigParam fields.
+ * Called at the end of ConfigParam_InitAll. After this, ParseEEPROM and
+ * ReadAndSaveAll can iterate over all_params[] instead of enumerating fields manually.
+ */
+static void build_param_list(void)
+{
+	uint8_t i;
+
+	num_params = 0;
+
+	all_params[num_params++] = &confProductId;
+	all_params[num_params++] = &confFactoryDefaultVersion;
+	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++)
+		all_params[num_params++] = &confLicenseKey[i];
+	all_params[num_params++] = &confFunctions.Seesaw;
+	all_params[num_params++] = &confFunctions.ReferenceLine;
+	all_params[num_params++] = &confFunctions.Curtain;
+	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
+		all_params[num_params++] = &confColor[i].Group;
+		all_params[num_params++] = &confColor[i].ArtificialColorPoint1;
+		all_params[num_params++] = &confColor[i].ArtificialColorPoint2;
+		all_params[num_params++] = &confColor[i].ArtificialColorPoint3;
+		all_params[num_params++] = &confColor[i].ArtificialColorPoint4;
+		all_params[num_params++] = &confColor[i].CameraBackground;
+		all_params[num_params++] = &confColor[i].ReferenceLine;
+		all_params[num_params++] = &confColor[i].Restricted;
+	}
+	all_params[num_params++] = &confCamera.Type;
+	all_params[num_params++] = &confCamera.RGain;
+	all_params[num_params++] = &confCamera.BGain;
+	all_params[num_params++] = &confCamera.FirstLine;
+	all_params[num_params++] = &confCamera.FirstPixel;
+	all_params[num_params++] = &confCamera.UsableLines;
+	all_params[num_params++] = &confCamera.UsablePixels;
+	all_params[num_params++] = &confCamera.UsableRatio;
+	all_params[num_params++] = &confCamera.Interface;
+	all_params[num_params++] = &confCamera.NaturalColorShutterTime;
+	all_params[num_params++] = &confCamera.NaturalColorBrightness;
+	all_params[num_params++] = &confCamera.NaturalColorIris;
+	all_params[num_params++] = &confCamera.NaturalColorExposureCompensation;
+	all_params[num_params++] = &confCamera.NaturalColorGainPeak;
+	all_params[num_params++] = &confCamera.ArtificialColorShutterTime;
+	all_params[num_params++] = &confCamera.ArtificialColorBrightness;
+	all_params[num_params++] = &confCamera.ArtificialColorIris;
+	all_params[num_params++] = &confCamera.ArtificialColorExposureCompensation;
+	all_params[num_params++] = &confCamera.ArtificialColorGainPeak;
+	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
+		all_params[num_params++] = &confCameraMode[i].Zoom;
+		all_params[num_params++] = &confCameraMode[i].ZoomMin;
+		all_params[num_params++] = &confCameraMode[i].ZoomMax;
+		all_params[num_params++] = &confCameraMode[i].ZoomSpeed;
+		all_params[num_params++] = &confCameraMode[i].Focus;
+		all_params[num_params++] = &confCameraMode[i].FocusMin;
+		all_params[num_params++] = &confCameraMode[i].FocusMax;
+		all_params[num_params++] = &confCameraMode[i].FocusSpeed;
+		all_params[num_params++] = &confCameraMode[i].NaturalColorExposure;
+		all_params[num_params++] = &confCameraMode[i].ArtificialColorExposure;
+		all_params[num_params++] = &confCameraMode[i].WhiteBalance;
+	}
+	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
+		all_params[num_params++] = &confMonitorMode[i].ColorGainR;
+		all_params[num_params++] = &confMonitorMode[i].ColorGainG;
+		all_params[num_params++] = &confMonitorMode[i].ColorGainB;
+		all_params[num_params++] = &confMonitorMode[i].Contrast;
+		all_params[num_params++] = &confMonitorMode[i].Brightness;
+		all_params[num_params++] = &confMonitorMode[i].Saturation;
+		all_params[num_params++] = &confMonitorMode[i].AutoPosNegEnable;
+		all_params[num_params++] = &confMonitorMode[i].AutoPosNegMin;
+		all_params[num_params++] = &confMonitorMode[i].AutoPosNegMax;
+		all_params[num_params++] = &confMonitorMode[i].NaturalColorContrast;
+		all_params[num_params++] = &confMonitorMode[i].NaturalColorBrightnessDefault;
+		all_params[num_params++] = &confMonitorMode[i].NaturalColorBrightnessCoefficient;
+		all_params[num_params++] = &confMonitorMode[i].NaturalColorDefault;
+		all_params[num_params++] = &confMonitorMode[i].NaturalColorCoefficient;
+		all_params[num_params++] = &confMonitorMode[i].ArtificalColorContrast;
+		all_params[num_params++] = &confMonitorMode[i].ArtificalColorBrightness;
+		all_params[num_params++] = &confMonitorMode[i].BlackLinesTop;
+		all_params[num_params++] = &confMonitorMode[i].BlackLinesBottom;
+		all_params[num_params++] = &confMonitorMode[i].GammaCorrection1;
+		all_params[num_params++] = &confMonitorMode[i].GammaCorrection2;
+		all_params[num_params++] = &confMonitorMode[i].GammaCorrection3;
+		all_params[num_params++] = &confMonitorMode[i].GammaCorrection4;
+		all_params[num_params++] = &confMonitorMode[i].GammaCorrection5;
+	}
+	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
+		all_params[num_params++] = &confVideo[i].PaletteSelection;
+		all_params[num_params++] = &confVideo[i].Type;
+		all_params[num_params++] = &confVideo[i].LinesPerFrame;
+		all_params[num_params++] = &confVideo[i].LinesActiveInCompletePicture;
+		all_params[num_params++] = &confVideo[i].FirstActiveLine;
+		all_params[num_params++] = &confVideo[i].HorizontalTotalLength;
+		all_params[num_params++] = &confVideo[i].HorizontalSyncLength;
+		all_params[num_params++] = &confVideo[i].HorizontalActiveVideoStart;
+		all_params[num_params++] = &confVideo[i].HorizontalActiveVideoLength;
+		all_params[num_params++] = &confVideo[i].VerticalSyncLength;
+		all_params[num_params++] = &confVideo[i].VoltageDac;
+		all_params[num_params++] = &confVideo[i].SyncRgb;
+		all_params[num_params++] = &confVideo[i].AspectRatio;
+	}
+	all_params[num_params++] = &confGraphics.ReferenceLineWidth;
+	all_params[num_params++] = &confGraphics.ReferenceLineLowSpeed;
+	all_params[num_params++] = &confGraphics.ReferenceLineHighSpeed;
+	all_params[num_params++] = &confGraphics.ReferenceLineHighSpeedDelay;
+	all_params[num_params++] = &confGraphics.ReferenceLineSwitchDelay;
+	all_params[num_params++] = &confGraphics.PosNegSpeed;
+	all_params[num_params++] = &confPTZ.LimitUp;
+	all_params[num_params++] = &confPTZ.LimitDown;
+	all_params[num_params++] = &confPTZ.LimitLeft;
+	all_params[num_params++] = &confPTZ.LimitRight;
+	all_params[num_params++] = &confBattery.Type;
+	all_params[num_params++] = &confBattery.NominalCapacity;
+	all_params[num_params++] = &confBattery.TempCoefficientCapacity;
+	all_params[num_params++] = &confBattery.AgeCoefficientCapacity;
+	all_params[num_params++] = &confBattery.LowCapacityLimit;
+	all_params[num_params++] = &confLighting.Intensity;
 }
 
 /**
@@ -347,7 +481,8 @@ void ConfigParam_InitAll(void)
 
 	confLighting.name = STRDUP(name);
 	confLighting.Intensity = ConfigParam_Init("Intensity", &default_numeric_data, TYPE_16);
-	// Additional parameters for lighting can be added here
+
+	build_param_list();
 }
 EXPORT_SYMBOL(ConfigParam_InitAll);
 
@@ -367,7 +502,6 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 	char *token;
 	ConfigParam *param = NULL;
 	int index = 0;
-	char *strtok_next_str;
 	char *strsep_current_ptr;
 
 	path_copy = STRDUP(path);
@@ -375,11 +509,9 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 		return NULL;
 	}
 
-	strtok_next_str = path_copy;
 	strsep_current_ptr = path_copy;
 
 	token = strsep(&strsep_current_ptr, ".[]");
-	strtok_next_str = NULL;
 
 	if (!token) {
 		kfree(path_copy);
@@ -492,7 +624,6 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 				param = &confCamera.ArtificialColorIris;
 			else if (strcmp(token, "ArtificialColorExposureCompensation") == 0)
 				param = &confCamera.ArtificialColorExposureCompensation;
-			// Added missing confCamera parameters based on error log
 			else if (strcmp(token, "NaturalColorShutterTime") == 0)
 				param = &confCamera.NaturalColorShutterTime;
 			else if (strcmp(token, "NaturalColorBrightness") == 0)
@@ -770,28 +901,7 @@ void ConfigParam_SetData(ConfigParam *param, const void *data, int (*platform_ee
 	if (!new_data)
 		return;
 
-	switch (param->type) {
-	case TYPE_8:
-		memcpy(new_data, data, param->size);
-		break;
-	case TYPE_16:
-		new_data[0] = ((uint16_t *)data)[0] & 0xFF;
-		new_data[1] = (((uint16_t *)data)[0] >> 8) & 0xFF;
-		break;
-	case TYPE_32:
-		new_data[0] = ((uint32_t *)data)[0] & 0xFF;
-		new_data[1] = (((uint32_t *)data)[0] >> 8) & 0xFF;
-		new_data[2] = (((uint32_t *)data)[0] >> 16) & 0xFF;
-		new_data[3] = (((uint32_t *)data)[0] >> 24) & 0xFF;
-		break;
-	case TYPE_ARRAY:
-		memcpy(new_data, data, param->size);
-		break;
-	case TYPE_STRING:
-		strncpy((char *)new_data, (const char *)data, param->size - 1);
-		new_data[param->size - 1] = '\0';
-		break;
-	default:
+	if (serialize_data(new_data, data, param->type, param->size) != 0) {
 		kfree(new_data);
 		return;
 	}
@@ -856,157 +966,10 @@ EXPORT_SYMBOL(ConfigParam_GetData);
  */
 void ConfigParam_ParseEEPROM(int (*platform_eeprom_read)(uint32_t, uint8_t *))
 {
-	uint8_t i;
+	size_t i;
 
-	// confProductId
-	ConfigParam_GetData(&confProductId, platform_eeprom_read);
-
-	// confFactoryDefaultVersion
-	ConfigParam_GetData(&confFactoryDefaultVersion, platform_eeprom_read);
-
-	// confLicenseKey
-	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++) {
-		ConfigParam_GetData(&confLicenseKey[i], platform_eeprom_read);
-	}
-
-	// confFunctions
-	ConfigParam_GetData(&confFunctions.Seesaw, platform_eeprom_read);
-	ConfigParam_GetData(&confFunctions.ReferenceLine, platform_eeprom_read);
-	ConfigParam_GetData(&confFunctions.Curtain, platform_eeprom_read);
-
-	// confColor
-	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
-		ConfigParam_GetData(&confColor[i].Group, platform_eeprom_read);
-		ConfigParam_GetData(&confColor[i].ArtificialColorPoint1, platform_eeprom_read);
-		ConfigParam_GetData(&confColor[i].ArtificialColorPoint2, platform_eeprom_read);
-		ConfigParam_GetData(&confColor[i].ArtificialColorPoint3, platform_eeprom_read);
-		ConfigParam_GetData(&confColor[i].ArtificialColorPoint4, platform_eeprom_read);
-		ConfigParam_GetData(&confColor[i].CameraBackground, platform_eeprom_read);
-		ConfigParam_GetData(&confColor[i].ReferenceLine, platform_eeprom_read);
-		ConfigParam_GetData(&confColor[i].Restricted, platform_eeprom_read);
-	}
-
-	// confCamera
-	ConfigParam_GetData(&confCamera.Type, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.RGain, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.BGain, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.FirstLine, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.FirstPixel, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.UsableLines, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.UsablePixels, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.UsableRatio, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.Interface, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.NaturalColorShutterTime, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.NaturalColorBrightness, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.NaturalColorIris, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.NaturalColorExposureCompensation, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.NaturalColorGainPeak, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.ArtificialColorShutterTime, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.ArtificialColorBrightness, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.ArtificialColorIris, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.ArtificialColorExposureCompensation, platform_eeprom_read);
-	ConfigParam_GetData(&confCamera.ArtificialColorGainPeak, platform_eeprom_read);
-
-	// confCameraMode
-	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
-		ConfigParam_GetData(&confCameraMode[i].Zoom, platform_eeprom_read);
-		ConfigParam_GetData(&confCameraMode[i].ZoomMin, platform_eeprom_read);
-		ConfigParam_GetData(&confCameraMode[i].ZoomMax, platform_eeprom_read);
-		ConfigParam_GetData(&confCameraMode[i].ZoomSpeed, platform_eeprom_read);
-		ConfigParam_GetData(&confCameraMode[i].Focus, platform_eeprom_read);
-		ConfigParam_GetData(&confCameraMode[i].FocusMin, platform_eeprom_read);
-		ConfigParam_GetData(&confCameraMode[i].FocusMax, platform_eeprom_read);
-		ConfigParam_GetData(&confCameraMode[i].FocusSpeed, platform_eeprom_read);
-		ConfigParam_GetData(&confCameraMode[i].NaturalColorExposure, platform_eeprom_read);
-		ConfigParam_GetData(&confCameraMode[i].ArtificialColorExposure, platform_eeprom_read);
-		ConfigParam_GetData(&confCameraMode[i].WhiteBalance, platform_eeprom_read);
-	}
-
-	// confMonitorMode
-	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
-		ConfigParam_GetData(&confMonitorMode[i].ColorGainR, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].ColorGainG, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].ColorGainB, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].Contrast, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].Brightness, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].Saturation, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].AutoPosNegEnable, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].AutoPosNegMin, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].AutoPosNegMax, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].NaturalColorContrast, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].NaturalColorBrightnessDefault, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].NaturalColorBrightnessCoefficient, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].NaturalColorDefault, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].NaturalColorCoefficient, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].ArtificalColorContrast, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].ArtificalColorBrightness, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].BlackLinesTop, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].BlackLinesBottom, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].GammaCorrection1, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].GammaCorrection2, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].GammaCorrection3, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].GammaCorrection4, platform_eeprom_read);
-		ConfigParam_GetData(&confMonitorMode[i].GammaCorrection5, platform_eeprom_read);
-
-		// print monitor mode values
-		pr_info("[%s] Monitor mode %d values: ColorGainR=%d, ColorGainG=%d, ColorGainB=%d, Contrast=%d, Brightness=%d, Saturation=%d, AutoPosNegEnable=%d, AutoPosNegMin=%d, AutoPosNegMax=%d, NaturalColorContrast=%d, NaturalColorBrightnessDefault=%d, NaturalColorBrightnessCoefficient=%d, NaturalColorDefault=%d, NaturalColorCoefficient=%d, ArtificalColorContrast=%d, ArtificalColorBrightness=%d, BlackLinesTop=%d, BlackLinesBottom=%d, GammaCorrection1=%d, GammaCorrection2=%d, GammaCorrection3=%d, GammaCorrection4=%d, GammaCorrection5=%d\n",
-			__func__, i, *(confMonitorMode[i].ColorGainR.data), *(confMonitorMode[i].ColorGainG.data), *(confMonitorMode[i].ColorGainB.data), *(confMonitorMode[i].Contrast.data),
-			*(confMonitorMode[i].Brightness.data), *(confMonitorMode[i].Saturation.data), *(confMonitorMode[i].AutoPosNegEnable.data), *(confMonitorMode[i].AutoPosNegMin.data),
-			*(confMonitorMode[i].AutoPosNegMax.data), *(confMonitorMode[i].NaturalColorContrast.data), *(confMonitorMode[i].NaturalColorBrightnessDefault.data),
-			*(confMonitorMode[i].NaturalColorBrightnessCoefficient.data), *(confMonitorMode[i].NaturalColorDefault.data), *(confMonitorMode[i].NaturalColorCoefficient.data),
-			*(confMonitorMode[i].ArtificalColorContrast.data), *(confMonitorMode[i].ArtificalColorBrightness.data), *(confMonitorMode[i].BlackLinesTop.data),
-			*(confMonitorMode[i].BlackLinesBottom.data), *(confMonitorMode[i].GammaCorrection1.data), *(confMonitorMode[i].GammaCorrection2.data), *(confMonitorMode[i].GammaCorrection3.data),
-			*(confMonitorMode[i].GammaCorrection4.data), *(confMonitorMode[i].GammaCorrection5.data));
-
-		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainR, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainG, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainB, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].Contrast, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].Brightness, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].Saturation, platform_eeprom_read);
-	}
-
-	// confVideo
-	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
-		ConfigParam_GetData(&confVideo[i].PaletteSelection, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].Type, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].LinesPerFrame, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].LinesActiveInCompletePicture, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].FirstActiveLine, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].HorizontalTotalLength, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].HorizontalSyncLength, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].HorizontalActiveVideoStart, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].HorizontalActiveVideoLength, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].VerticalSyncLength, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].VoltageDac, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].SyncRgb, platform_eeprom_read);
-		ConfigParam_GetData(&confVideo[i].AspectRatio, platform_eeprom_read);
-	}
-
-	// confGraphics
-	ConfigParam_GetData(&confGraphics.ReferenceLineWidth, platform_eeprom_read);
-	ConfigParam_GetData(&confGraphics.ReferenceLineLowSpeed, platform_eeprom_read);
-	ConfigParam_GetData(&confGraphics.ReferenceLineHighSpeed, platform_eeprom_read);
-	ConfigParam_GetData(&confGraphics.ReferenceLineHighSpeedDelay, platform_eeprom_read);
-	ConfigParam_GetData(&confGraphics.ReferenceLineSwitchDelay, platform_eeprom_read);
-	ConfigParam_GetData(&confGraphics.PosNegSpeed, platform_eeprom_read);
-
-	// confPTZ
-	ConfigParam_GetData(&confPTZ.LimitUp, platform_eeprom_read);
-	ConfigParam_GetData(&confPTZ.LimitDown, platform_eeprom_read);
-	ConfigParam_GetData(&confPTZ.LimitLeft, platform_eeprom_read);
-	ConfigParam_GetData(&confPTZ.LimitRight, platform_eeprom_read);
-
-	// confBattery
-	ConfigParam_GetData(&confBattery.Type, platform_eeprom_read);
-	ConfigParam_GetData(&confBattery.NominalCapacity, platform_eeprom_read);
-	ConfigParam_GetData(&confBattery.TempCoefficientCapacity, platform_eeprom_read);
-	ConfigParam_GetData(&confBattery.AgeCoefficientCapacity, platform_eeprom_read);
-	ConfigParam_GetData(&confBattery.LowCapacityLimit, platform_eeprom_read);
-
-	// confLighting
-	ConfigParam_GetData(&confLighting.Intensity, platform_eeprom_read);
-	// Additional parameters for lighting can be added here
+	for (i = 0; i < num_params; i++)
+		ConfigParam_GetData(all_params[i], platform_eeprom_read);
 }
 EXPORT_SYMBOL(ConfigParam_ParseEEPROM);
 
@@ -1090,159 +1053,11 @@ void ConfigParam_PrintParam(ConfigParam *param, int (*platform_eeprom_read)(uint
  */
 void ConfigParam_PrintAll(int (*platform_eeprom_read)(uint32_t, uint8_t *))
 {
-	int i;
+	size_t i;
 
 	pr_info("[%s] --- All Configuration Parameters (Kernel) ---\n", __func__);
-
-	// confProductId
-	pr_info("[%s] --- ProductID (%s) ---\n", __func__, confProductId.name ? confProductId.name : "N/A");
-	ConfigParam_PrintParam(&confProductId, platform_eeprom_read);
-
-	// confFactoryDefaultVersion
-	pr_info("[%s] --- FactoryDefaultVersion (%s) ---\n", __func__, confFactoryDefaultVersion.name ? confFactoryDefaultVersion.name : "N/A");
-	ConfigParam_PrintParam(&confFactoryDefaultVersion, platform_eeprom_read);
-
-	// confLicenseKey
-	pr_info("[%s] --- LicenseKey ---\n", __func__);
-	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++) {
-		ConfigParam_PrintParam(&confLicenseKey[i], platform_eeprom_read);
-	}
-
-	// confFunctions
-	pr_info("[%s] --- Functions (%s) ---\n", __func__, confFunctions.name ? confFunctions.name : "N/A");
-	ConfigParam_PrintParam(&confFunctions.Seesaw, platform_eeprom_read);
-	ConfigParam_PrintParam(&confFunctions.ReferenceLine, platform_eeprom_read);
-	ConfigParam_PrintParam(&confFunctions.Curtain, platform_eeprom_read);
-
-	// confColor
-	pr_info("[%s] --- Color Profiles (confColor) ---\n", __func__);
-	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
-		pr_info("[%s]   -- Color Profile [%d] (%s) --\n", __func__, i, confColor[i].name ? confColor[i].name : "N/A");
-		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint1, platform_eeprom_read);
-		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint2, platform_eeprom_read);
-		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint3, platform_eeprom_read);
-		ConfigParam_PrintParam(&confColor[i].ArtificialColorPoint4, platform_eeprom_read);
-		ConfigParam_PrintParam(&confColor[i].CameraBackground, platform_eeprom_read);
-		ConfigParam_PrintParam(&confColor[i].ReferenceLine, platform_eeprom_read);
-		ConfigParam_PrintParam(&confColor[i].Restricted, platform_eeprom_read);
-	}
-
-	// confCamera
-	pr_info("[%s] --- Camera (%s) ---\n", __func__, confCamera.name ? confCamera.name : "N/A");
-	ConfigParam_PrintParam(&confCamera.Type, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.RGain, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.BGain, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.FirstLine, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.UsableLines, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.FirstPixel, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.UsablePixels, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.UsableRatio, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.Interface, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.ArtificialColorShutterTime, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.ArtificialColorBrightness, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.ArtificialColorIris, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.ArtificialColorExposureCompensation, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.NaturalColorShutterTime, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.NaturalColorBrightness, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.NaturalColorIris, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.NaturalColorExposureCompensation, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.NaturalColorGainPeak, platform_eeprom_read);
-	ConfigParam_PrintParam(&confCamera.ArtificialColorGainPeak, platform_eeprom_read);
-
-	// confCameraMode
-	pr_info("[%s] --- Camera Modes (confCameraMode) ---\n", __func__);
-	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
-		pr_info("[%s]   -- Camera Mode [%d] (%s) --\n", __func__, i, confCameraMode[i].name ? confCameraMode[i].name : "N/A");
-		ConfigParam_PrintParam(&confCameraMode[i].Zoom, platform_eeprom_read);
-		ConfigParam_PrintParam(&confCameraMode[i].ZoomMin, platform_eeprom_read);
-		ConfigParam_PrintParam(&confCameraMode[i].ZoomMax, platform_eeprom_read);
-		ConfigParam_PrintParam(&confCameraMode[i].ZoomSpeed, platform_eeprom_read);
-		ConfigParam_PrintParam(&confCameraMode[i].Focus, platform_eeprom_read);
-		ConfigParam_PrintParam(&confCameraMode[i].FocusMin, platform_eeprom_read);
-		ConfigParam_PrintParam(&confCameraMode[i].FocusMax, platform_eeprom_read);
-		ConfigParam_PrintParam(&confCameraMode[i].FocusSpeed, platform_eeprom_read);
-		ConfigParam_PrintParam(&confCameraMode[i].NaturalColorExposure, platform_eeprom_read);
-		ConfigParam_PrintParam(&confCameraMode[i].ArtificialColorExposure, platform_eeprom_read);
-		ConfigParam_PrintParam(&confCameraMode[i].WhiteBalance, platform_eeprom_read);
-	}
-
-	// confMonitorMode
-	pr_info("[%s] --- Monitor Modes (confMonitorMode) ---\n", __func__);
-	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
-		pr_info("[%s]   -- Monitor Mode [%d] (%s) --\n", __func__, i, confMonitorMode[i].name ? confMonitorMode[i].name : "N/A");
-		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainR, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainG, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].ColorGainB, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].Contrast, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].Brightness, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].Saturation, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].AutoPosNegEnable, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].AutoPosNegMin, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].AutoPosNegMax, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].NaturalColorContrast, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].NaturalColorBrightnessDefault, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].NaturalColorBrightnessCoefficient, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].NaturalColorDefault, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].NaturalColorCoefficient, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].ArtificalColorContrast, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].ArtificalColorBrightness, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].BlackLinesTop, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].BlackLinesBottom, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].GammaCorrection1, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].GammaCorrection2, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].GammaCorrection3, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].GammaCorrection4, platform_eeprom_read);
-		ConfigParam_PrintParam(&confMonitorMode[i].GammaCorrection5, platform_eeprom_read);
-	}
-
-	// confVideo
-	pr_info("[%s] --- Video Settings (confVideo) ---\n", __func__);
-	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
-		pr_info("[%s]   -- Video Setting [%d] (%s) --\n", __func__, i, confVideo[i].name ? confVideo[i].name : "N/A");
-		ConfigParam_PrintParam(&confVideo[i].PaletteSelection, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].Type, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].LinesPerFrame, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].LinesActiveInCompletePicture, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].FirstActiveLine, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].HorizontalTotalLength, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].HorizontalSyncLength, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].HorizontalActiveVideoStart, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].HorizontalActiveVideoLength, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].VerticalSyncLength, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].VoltageDac, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].SyncRgb, platform_eeprom_read);
-		ConfigParam_PrintParam(&confVideo[i].AspectRatio, platform_eeprom_read);
-	}
-
-	// confGraphics
-	pr_info("[%s] --- Graphics (%s) ---\n", __func__, confGraphics.name ? confGraphics.name : "N/A");
-	ConfigParam_PrintParam(&confGraphics.ReferenceLineWidth, platform_eeprom_read);
-	ConfigParam_PrintParam(&confGraphics.ReferenceLineLowSpeed, platform_eeprom_read);
-	ConfigParam_PrintParam(&confGraphics.ReferenceLineHighSpeed, platform_eeprom_read);
-	ConfigParam_PrintParam(&confGraphics.ReferenceLineHighSpeedDelay, platform_eeprom_read);
-	ConfigParam_PrintParam(&confGraphics.ReferenceLineSwitchDelay, platform_eeprom_read);
-	ConfigParam_PrintParam(&confGraphics.PosNegSpeed, platform_eeprom_read);
-
-	// confPTZ
-	pr_info("[%s] --- PTZ (%s) ---\n", __func__, confPTZ.name ? confPTZ.name : "N/A");
-	ConfigParam_PrintParam(&confPTZ.LimitUp, platform_eeprom_read);
-	ConfigParam_PrintParam(&confPTZ.LimitDown, platform_eeprom_read);
-	ConfigParam_PrintParam(&confPTZ.LimitLeft, platform_eeprom_read);
-	ConfigParam_PrintParam(&confPTZ.LimitRight, platform_eeprom_read);
-
-	// confBattery
-	pr_info("[%s] --- Battery (%s) ---\n", __func__, confBattery.name ? confBattery.name : "N/A");
-	ConfigParam_PrintParam(&confBattery.Type, platform_eeprom_read);
-	ConfigParam_PrintParam(&confBattery.NominalCapacity, platform_eeprom_read);
-	ConfigParam_PrintParam(&confBattery.TempCoefficientCapacity, platform_eeprom_read);
-	ConfigParam_PrintParam(&confBattery.AgeCoefficientCapacity, platform_eeprom_read);
-	ConfigParam_PrintParam(&confBattery.LowCapacityLimit, platform_eeprom_read);
-
-	// confLighting
-	pr_info("[%s] --- Lighting (%s) ---\n", __func__, confLighting.name ? confLighting.name : "N/A");
-	ConfigParam_PrintParam(&confLighting.Intensity, platform_eeprom_read);
-	// Additional parameters for lighting can be added here
-
+	for (i = 0; i < num_params; i++)
+		ConfigParam_PrintParam(all_params[i], platform_eeprom_read);
 	pr_info("[%s] --- End of Configuration Parameters (Kernel) ---\n", __func__);
 }
 
@@ -1264,7 +1079,7 @@ EXPORT_SYMBOL(ConfigParam_MarkInitialized);
  * @param param: Parameter to save
  * @return: 1 if parameter was written, 0 if no write needed, negative on error
  */
-int ConfigParam_SaveParam(ConfigParam *param, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t))
+int ConfigParam_ReadAndSaveParam(ConfigParam *param, uint8_t save, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t))
 {
 	uint8_t i;
 	uint8_t eeprom_byte;
@@ -1281,7 +1096,7 @@ int ConfigParam_SaveParam(ConfigParam *param, int (*platform_eeprom_read)(uint32
 				needs_write = 0; /* Data matches, skip write */
 			}
 		}
-		if (needs_write) {
+		if (needs_write && save) {
 			if (platform_eeprom_write(param->address + i, param->data[i]) != 0) {
 				pr_err("[%s]: Failed to write byte %u of param %s\n", __func__, i, param->name ? param->name : "UNKNOWN");
 				return -EIO;
@@ -1290,7 +1105,7 @@ int ConfigParam_SaveParam(ConfigParam *param, int (*platform_eeprom_read)(uint32
 		}
 	}
 
-	if (wrote_any) {
+	if (wrote_any && save) {
 		pr_info("[%s]: Wrote param %s (addr=0x%04X, size=%u)\n", __func__, param->name ? param->name : "UNKNOWN", param->address, param->size);
 	}
 
@@ -1302,144 +1117,25 @@ int ConfigParam_SaveParam(ConfigParam *param, int (*platform_eeprom_read)(uint32
  * Only writes parameters that differ from current EEPROM contents.
  * @return: Number of parameters that were written, or negative error code
  */
-int ConfigParam_SaveAll(int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t))
+int ConfigParam_ReadAndSaveAll(uint8_t save, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t))
 {
-	uint8_t i;
+	size_t i;
 	int ret;
 	int total_written = 0;
 
-/* Helper macro to save param and track count */
-#define SAVE_AND_COUNT(p, r, w)                                                                                                                                                                        \
-	do {                                                                                                                                                                                           \
-		ret = ConfigParam_SaveParam(p, r, w);                                                                                                                                                  \
-		if (ret < 0)                                                                                                                                                                           \
-			return ret;                                                                                                                                                                    \
-		total_written += ret;                                                                                                                                                                  \
-	} while (0)
-
 	pr_info("[%s]: Starting save of all configuration parameters\n", __func__);
 
-	/* confProductId */
-	SAVE_AND_COUNT(&confProductId, platform_eeprom_read, platform_eeprom_write);
-
-	/* confFactoryDefaultVersion */
-	SAVE_AND_COUNT(&confFactoryDefaultVersion, platform_eeprom_read, platform_eeprom_write);
-
-	/* confLicenseKey */
-	for (i = 0; i < CONFIG_LICENSE_KEY_AMT; i++) {
-		SAVE_AND_COUNT(&confLicenseKey[i], platform_eeprom_read, platform_eeprom_write);
+	for (i = 0; i < num_params; i++) {
+		ret = ConfigParam_ReadAndSaveParam(all_params[i], save, platform_eeprom_read, platform_eeprom_write);
+		if (ret < 0)
+			return ret;
+		total_written += ret;
 	}
-
-	/* confFunctions */
-	SAVE_AND_COUNT(&confFunctions.Seesaw, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confFunctions.ReferenceLine, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confFunctions.Curtain, platform_eeprom_read, platform_eeprom_write);
-
-	/* confColor */
-	for (i = 0; i < CONFIG_COLOR_AMT; i++) {
-		SAVE_AND_COUNT(&confColor[i].Group, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint1, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint2, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint3, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confColor[i].ArtificialColorPoint4, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confColor[i].CameraBackground, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confColor[i].ReferenceLine, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confColor[i].Restricted, platform_eeprom_read, platform_eeprom_write);
-	}
-
-	/* confCamera */
-	SAVE_AND_COUNT(&confCamera.Type, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.RGain, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.BGain, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.FirstLine, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.FirstPixel, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.UsableLines, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.UsablePixels, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.UsableRatio, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.Interface, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.NaturalColorShutterTime, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.NaturalColorBrightness, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.NaturalColorIris, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.NaturalColorExposureCompensation, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.NaturalColorGainPeak, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.ArtificialColorShutterTime, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.ArtificialColorBrightness, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.ArtificialColorIris, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.ArtificialColorExposureCompensation, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confCamera.ArtificialColorGainPeak, platform_eeprom_read, platform_eeprom_write);
-
-	/* confCameraMode */
-	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
-		SAVE_AND_COUNT(&confCameraMode[i].Zoom, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confCameraMode[i].ZoomMin, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confCameraMode[i].ZoomMax, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confCameraMode[i].ZoomSpeed, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confCameraMode[i].Focus, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confCameraMode[i].FocusMin, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confCameraMode[i].FocusMax, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confCameraMode[i].FocusSpeed, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confCameraMode[i].NaturalColorExposure, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confCameraMode[i].ArtificialColorExposure, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confCameraMode[i].WhiteBalance, platform_eeprom_read, platform_eeprom_write);
-	}
-
-	/* confMonitorMode */
-	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
-		SAVE_AND_COUNT(&confMonitorMode[i].ColorGainR, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confMonitorMode[i].ColorGainG, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confMonitorMode[i].ColorGainB, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confMonitorMode[i].Contrast, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confMonitorMode[i].Brightness, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confMonitorMode[i].Saturation, platform_eeprom_read, platform_eeprom_write);
-	}
-
-	/* confVideo */
-	for (i = 0; i < CONFIG_VIDEO_AMT; i++) {
-		SAVE_AND_COUNT(&confVideo[i].PaletteSelection, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].Type, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].LinesPerFrame, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].LinesActiveInCompletePicture, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].FirstActiveLine, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].HorizontalTotalLength, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].HorizontalSyncLength, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].HorizontalActiveVideoStart, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].HorizontalActiveVideoLength, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].VerticalSyncLength, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].VoltageDac, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].SyncRgb, platform_eeprom_read, platform_eeprom_write);
-		SAVE_AND_COUNT(&confVideo[i].AspectRatio, platform_eeprom_read, platform_eeprom_write);
-	}
-
-	/* confGraphics */
-	SAVE_AND_COUNT(&confGraphics.ReferenceLineWidth, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confGraphics.ReferenceLineLowSpeed, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confGraphics.ReferenceLineHighSpeed, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confGraphics.ReferenceLineHighSpeedDelay, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confGraphics.ReferenceLineSwitchDelay, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confGraphics.PosNegSpeed, platform_eeprom_read, platform_eeprom_write);
-
-	/* confPTZ */
-	SAVE_AND_COUNT(&confPTZ.LimitUp, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confPTZ.LimitDown, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confPTZ.LimitLeft, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confPTZ.LimitRight, platform_eeprom_read, platform_eeprom_write);
-
-	/* confBattery */
-	SAVE_AND_COUNT(&confBattery.Type, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confBattery.NominalCapacity, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confBattery.TempCoefficientCapacity, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confBattery.AgeCoefficientCapacity, platform_eeprom_read, platform_eeprom_write);
-	SAVE_AND_COUNT(&confBattery.LowCapacityLimit, platform_eeprom_read, platform_eeprom_write);
-
-	/* confLighting */
-	SAVE_AND_COUNT(&confLighting.Intensity, platform_eeprom_read, platform_eeprom_write);
-
-#undef SAVE_AND_COUNT
 
 	pr_info("[%s]: Save complete. %d parameters needed writing\n", __func__, total_written);
 	return total_written;
 }
-EXPORT_SYMBOL(ConfigParam_SaveAll);
+EXPORT_SYMBOL(ConfigParam_ReadAndSaveAll);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Max Borglowe");

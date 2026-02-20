@@ -192,7 +192,7 @@ void ConfigParam_SetData(ConfigParam *param, const void *data, int (*platform_ee
 const void *ConfigParam_GetData(ConfigParam *param, int (*platform_eeprom_read)(uint32_t, uint8_t *));
 int ConfigParam_IsInitialized(void);
 void ConfigParam_MarkInitialized(void);
-int ConfigParam_SaveParam(ConfigParam *param, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t));
-int ConfigParam_SaveAll(int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t));
+int ConfigParam_ReadAndSaveParam(ConfigParam *param, uint8_t save, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t));
+int ConfigParam_ReadAndSaveAll(uint8_t save, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t));
 
 #endif // LVICONFIG_PARAMETERS_H

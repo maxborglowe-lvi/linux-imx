@@ -45,6 +45,8 @@ struct lviconfig_ctrl_mediator {
 #define IOCTL_GET_CONFIG_PARAM _IOR('C', 4, struct lviconfig_ctrl_mediator)
 #define IOCTL_SET_CONFIG_PARAM_EEPROM _IOW('C', 5, struct lviconfig_ctrl_mediator)
 #define IOCTL_SAVE_ALL_CONFIG_PARAMS _IO('C', 6)
+#define IOCTL_READ_ALL_CONFIG_PARAMS _IO('C', 7)
+#define IOCTL_PRINT_ALL_CONFIG_PARAMS _IO('C', 8)
 
 static int major;
 static struct i2c_client *i2c_client_g;
@@ -62,7 +64,7 @@ struct eeprom_data {
 };
 
 // Kernel-space implementations of platform_eeprom functions
-#ifdef __KERNEL__
+// #ifdef __KERNEL__
 int platform_eeprom_write(uint32_t reg, uint8_t data_val)
 {
 	struct i2c_msg msgs[1];
@@ -156,7 +158,7 @@ int platform_eeprom_read(uint32_t reg, uint8_t *data_val)
 	}
 	return 0;
 }
-#endif // __KERNEL__
+// #endif // __KERNEL__
 
 // Device tree match table
 static const struct of_device_id lviconfig_ctrl_of_match[] = {
@@ -187,18 +189,31 @@ static long lviconfig_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned l
 	struct lviconfig_ctrl_mediator mediator; /**< Mediator structure for config parameters */
 
 	/* Handle commands that don't need mediator data first */
-	if (cmd == IOCTL_SAVE_ALL_CONFIG_PARAMS) {
-		pr_info("[lviconfig] SAVE_ALL_CONFIG_PARAMS\n");
+	if (cmd == IOCTL_SAVE_ALL_CONFIG_PARAMS || cmd == IOCTL_READ_ALL_CONFIG_PARAMS) {
 
-		ret = ConfigParam_SaveAll(platform_eeprom_read, platform_eeprom_write);
+		uint8_t save;
+		if(cmd == IOCTL_SAVE_ALL_CONFIG_PARAMS) {
+			save = 1;
+		} else {
+			save = 0;
+		}
+
+		pr_info("[lviconfig] IOCTL_%s_ALL_CONFIG_PARAMS\n", save ? "SAVE" : "READ");
+
+		ret = ConfigParam_ReadAndSaveAll(save, platform_eeprom_read, platform_eeprom_write);
 
 		if (ret < 0) {
-			pr_err("[lviconfig] SAVE_ALL_CONFIG_PARAMS failed: %d\n", ret);
+			pr_err("[lviconfig] IOCTL_%s_ALL_CONFIG_PARAMS failed: %d\n", save ? "SAVE" : "READ", ret);
 			return ret;
 		}
 
-		pr_info("[lviconfig] SAVE_ALL_CONFIG_PARAMS complete: %d params written\n", ret);
+		pr_info("[lviconfig] IOCTL_%s_ALL_CONFIG_PARAMS complete: %d params written\n", save ? "SAVE" : "READ", ret);
+		return 0;
+	}
 
+	if (cmd == IOCTL_PRINT_ALL_CONFIG_PARAMS) {
+		pr_info("[lviconfig] IOCTL_PRINT_ALL_CONFIG_PARAMS\n");
+		ConfigParam_PrintAll(platform_eeprom_read);
 		return 0;
 	}
 
