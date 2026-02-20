@@ -8,6 +8,7 @@
 #include <linux/ioctl.h>
 
 #include <linux/lviconfig_parameters.h>
+#include <linux/notifier.h>
 
 #define PWM_MAGIC 'P'
 
@@ -25,10 +26,47 @@ struct lvipwm_drvdata {
 	struct pwm_state state; // Per-device state
 	struct device *device;
 	dev_t devno;
+	struct notifier_block lviconfig_nb;
 };
 
 static int major;
 static struct class *pwm_class;
+
+/**
+ * lvipwm_lviconfig_notifier - react to a confLighting.Intensity change.
+ * Re-applies the PWM duty cycle whenever the Intensity parameter is
+ * updated through lviconfig.
+ */
+static int lvipwm_lviconfig_notifier(struct notifier_block *nb,
+				     unsigned long action, void *data)
+{
+	struct lvipwm_drvdata *drvdata =
+		container_of(nb, struct lvipwm_drvdata, lviconfig_nb);
+	ConfigParam *param = (ConfigParam *)data;
+	u64 duty;
+	int ret;
+
+	if (param != &confLighting.Intensity)
+		return NOTIFY_DONE;
+
+	duty = confLighting.Intensity.data[0] |
+	       ((u64)confLighting.Intensity.data[1] << 8);
+
+	if (duty > drvdata->state.period) {
+		pr_warn("[lvipwm] notifier: duty %llu exceeds period %llu, capping\n",
+			duty, drvdata->state.period);
+		duty = drvdata->state.period;
+	}
+
+	drvdata->state.duty_cycle = duty;
+	ret = pwm_apply_state(drvdata->pwm, &drvdata->state);
+	if (ret < 0)
+		pr_err("[lvipwm] notifier: pwm_apply_state failed: %d\n", ret);
+	else
+		pr_info("[lvipwm] notifier: duty cycle updated to %llu ns\n", duty);
+
+	return NOTIFY_OK;
+}
 
 static long lvipwm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -237,6 +275,9 @@ static int lvipwm_probe(struct platform_device *pdev)
 	pr_info("[%s] PWM state applied successfully\n", __func__);
 	pr_info("[%s] lvipwm driver probed successfully\n", __func__);
 
+	drvdata->lviconfig_nb.notifier_call = lvipwm_lviconfig_notifier;
+	lviconfig_register_notifier(&drvdata->lviconfig_nb);
+
 	return 0;
 
 destroy_device:
@@ -257,6 +298,7 @@ static int lvipwm_remove(struct platform_device *pdev)
 	pr_info("[%s] called\n", __func__);
 
 	if (drvdata) {
+		lviconfig_unregister_notifier(&drvdata->lviconfig_nb);
 		pwm_disable(drvdata->pwm);
 		device_destroy(pwm_class, drvdata->devno);
 		class_destroy(pwm_class);

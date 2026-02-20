@@ -1,5 +1,6 @@
 #include <linux/module.h>
 #include <linux/lviconfig_parameters.h>
+#include <linux/notifier.h>
 
 //copy string to variable
 #define STRDUP(s) kstrdup(s, GFP_KERNEL)
@@ -65,6 +66,38 @@ EXPORT_SYMBOL(confLighting);
 #define ALL_PARAMS_MAX 350
 static ConfigParam *all_params[ALL_PARAMS_MAX];
 static size_t num_params;
+
+/* Blocking notifier list — subscribers are called synchronously (process context)
+ * whenever a ConfigParam's in-memory value changes.
+ */
+static BLOCKING_NOTIFIER_HEAD(lviconfig_notifier_list);
+
+int lviconfig_register_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&lviconfig_notifier_list, nb);
+}
+EXPORT_SYMBOL(lviconfig_register_notifier);
+
+int lviconfig_unregister_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&lviconfig_notifier_list, nb);
+}
+EXPORT_SYMBOL(lviconfig_unregister_notifier);
+
+void lviconfig_notify_param_changed(ConfigParam *param)
+{
+	blocking_notifier_call_chain(&lviconfig_notifier_list, 0, param);
+}
+EXPORT_SYMBOL(lviconfig_notify_param_changed);
+
+void lviconfig_notify_all_params_changed(void)
+{
+	size_t i;
+
+	for (i = 0; i < num_params; i++)
+		blocking_notifier_call_chain(&lviconfig_notifier_list, 0, all_params[i]);
+}
+EXPORT_SYMBOL(lviconfig_notify_all_params_changed);
 
 /**
  * @brief Serialize src into dst according to type (little-endian).
@@ -624,6 +657,7 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 				param = &confCamera.ArtificialColorIris;
 			else if (strcmp(token, "ArtificialColorExposureCompensation") == 0)
 				param = &confCamera.ArtificialColorExposureCompensation;
+			// Added missing confCamera parameters based on error log
 			else if (strcmp(token, "NaturalColorShutterTime") == 0)
 				param = &confCamera.NaturalColorShutterTime;
 			else if (strcmp(token, "NaturalColorBrightness") == 0)
@@ -924,6 +958,8 @@ void ConfigParam_SetData(ConfigParam *param, const void *data, int (*platform_ee
 
 	memcpy(param->data, new_data, param->size);
 	kfree(new_data);
+
+	lviconfig_notify_param_changed(param);
 }
 EXPORT_SYMBOL(ConfigParam_SetData);
 

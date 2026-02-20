@@ -189,25 +189,28 @@ static long lviconfig_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned l
 	struct lviconfig_ctrl_mediator mediator; /**< Mediator structure for config parameters */
 
 	/* Handle commands that don't need mediator data first */
-	if (cmd == IOCTL_SAVE_ALL_CONFIG_PARAMS || cmd == IOCTL_READ_ALL_CONFIG_PARAMS) {
+	if (cmd == IOCTL_SAVE_ALL_CONFIG_PARAMS) {
+		/* Write current in-memory values to EEPROM. Does not change param->data. */
+		pr_info("[lviconfig] IOCTL_SAVE_ALL_CONFIG_PARAMS\n");
 
-		uint8_t save;
-		if(cmd == IOCTL_SAVE_ALL_CONFIG_PARAMS) {
-			save = 1;
-		} else {
-			save = 0;
-		}
-
-		pr_info("[lviconfig] IOCTL_%s_ALL_CONFIG_PARAMS\n", save ? "SAVE" : "READ");
-
-		ret = ConfigParam_ReadAndSaveAll(save, platform_eeprom_read, platform_eeprom_write);
-
+		ret = ConfigParam_ReadAndSaveAll(1, platform_eeprom_read, platform_eeprom_write);
 		if (ret < 0) {
-			pr_err("[lviconfig] IOCTL_%s_ALL_CONFIG_PARAMS failed: %d\n", save ? "SAVE" : "READ", ret);
+			pr_err("[lviconfig] IOCTL_SAVE_ALL_CONFIG_PARAMS failed: %d\n", ret);
 			return ret;
 		}
 
-		pr_info("[lviconfig] IOCTL_%s_ALL_CONFIG_PARAMS complete: %d params written\n", save ? "SAVE" : "READ", ret);
+		pr_info("[lviconfig] IOCTL_SAVE_ALL_CONFIG_PARAMS complete: %d params written\n", ret);
+		return 0;
+	}
+
+	if (cmd == IOCTL_READ_ALL_CONFIG_PARAMS) {
+		/* Read EEPROM into param->data for every parameter, then notify subscribers. */
+		pr_info("[lviconfig] IOCTL_READ_ALL_CONFIG_PARAMS\n");
+
+		ConfigParam_ParseEEPROM(platform_eeprom_read);
+		lviconfig_notify_all_params_changed();
+
+		pr_info("[lviconfig] IOCTL_READ_ALL_CONFIG_PARAMS complete\n");
 		return 0;
 	}
 
@@ -245,6 +248,8 @@ static long lviconfig_ctrl_ioctl(struct file *file, unsigned int cmd, unsigned l
 			pr_err("[%s]: Failed to copy data from user space\n", __func__);
 			return -EFAULT;
 		}
+
+		lviconfig_notify_param_changed(param);
 
 		break;
 	}

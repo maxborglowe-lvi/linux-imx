@@ -30,6 +30,7 @@
 #include <linux/miscdevice.h>
 
 #include <linux/lviconfig_parameters.h>
+#include <linux/notifier.h>
 
 #define DRIVER_NAME "imx-lcdifv3"
 #define DEVICE_NAME "lvicolor"
@@ -86,6 +87,7 @@ struct lcdifv3_soc {
 	u32 thres_high_div;
 
 	struct lcdifv3_csc_params current_csc;
+	struct notifier_block lviconfig_nb;
 };
 
 struct lcdifv3_soc_pdata {
@@ -792,6 +794,74 @@ static struct file_operations fops = {
 	.unlocked_ioctl = lcdifv3_ioctl,
 };
 
+/**
+ * lcdifv3_lviconfig_notifier - react to a confMonitorMode[0] parameter change.
+ * Rebuilds and re-applies the CSC matrix whenever brightness, contrast,
+ * saturation or an RGB gain parameter is updated through lviconfig.
+ */
+static int lcdifv3_lviconfig_notifier(struct notifier_block *nb,
+				      unsigned long action, void *data)
+{
+	struct lcdifv3_soc *lcdifv3 =
+		container_of(nb, struct lcdifv3_soc, lviconfig_nb);
+	ConfigParam *param = (ConfigParam *)data;
+	int local_matrix[3][4];
+	int brightness, contrast, saturation, r_gain, g_gain, b_gain;
+
+	/* Only care about the six display-pipeline parameters */
+	if (param != &confMonitorMode[0].Brightness &&
+	    param != &confMonitorMode[0].Contrast   &&
+	    param != &confMonitorMode[0].Saturation  &&
+	    param != &confMonitorMode[0].ColorGainR  &&
+	    param != &confMonitorMode[0].ColorGainG  &&
+	    param != &confMonitorMode[0].ColorGainB)
+		return NOTIFY_DONE;
+
+	if (!lcdifv3->base)
+		return NOTIFY_DONE;
+
+	brightness = *(confMonitorMode[0].Brightness.data);
+	contrast   = *(confMonitorMode[0].Contrast.data);
+	saturation = *(confMonitorMode[0].Saturation.data);
+	r_gain     = *(confMonitorMode[0].ColorGainR.data);
+	g_gain     = *(confMonitorMode[0].ColorGainG.data);
+	b_gain     = *(confMonitorMode[0].ColorGainB.data);
+
+	if (brightness == 0 && contrast == 0 && saturation == 0) {
+		brightness = 128;
+		contrast   = 128;
+		saturation = 128;
+	}
+	if (r_gain == 0 && g_gain == 0 && b_gain == 0) {
+		r_gain = 128;
+		g_gain = 128;
+		b_gain = 128;
+	}
+
+	lcdifv3->current_csc.brightness = min(max(brightness, 10), 255);
+	lcdifv3->current_csc.contrast   = min(max(contrast,   10), 255);
+	lcdifv3->current_csc.saturation = min(max(saturation, 10), 255);
+	lcdifv3->current_csc.r_gain     = min(max(r_gain,      0), 255);
+	lcdifv3->current_csc.g_gain     = min(max(g_gain,      0), 255);
+	lcdifv3->current_csc.b_gain     = min(max(b_gain,      0), 255);
+
+	lcdifv3_build_color_matrix(local_matrix,
+				   lcdifv3->current_csc.brightness,
+				   lcdifv3->current_csc.contrast,
+				   lcdifv3->current_csc.saturation,
+				   lcdifv3->current_csc.r_gain,
+				   lcdifv3->current_csc.g_gain,
+				   lcdifv3->current_csc.b_gain);
+	lcdifv3_config_rgb_to_ycbcr(lcdifv3->base, local_matrix);
+
+	pr_info("[lcdifv3] notifier: CSC updated: B=%d C=%d S=%d R=%d G=%d B=%d\n",
+		lcdifv3->current_csc.brightness, lcdifv3->current_csc.contrast,
+		lcdifv3->current_csc.saturation, lcdifv3->current_csc.r_gain,
+		lcdifv3->current_csc.g_gain,     lcdifv3->current_csc.b_gain);
+
+	return NOTIFY_OK;
+}
+
 static int imx_lcdifv3_probe(struct platform_device *pdev)
 {
 	int ret;
@@ -942,6 +1012,9 @@ skip_ioctl:
 
 	pr_info("[%s] probe end\n", __func__);
 
+	lcdifv3->lviconfig_nb.notifier_call = lcdifv3_lviconfig_notifier;
+	lviconfig_register_notifier(&lcdifv3->lviconfig_nb);
+
 	return lcdifv3_add_client_devices(lcdifv3);
 }
 
@@ -959,6 +1032,8 @@ static int imx_lcdifv3_remove(struct platform_device *pdev)
 	}
 
 	struct lcdifv3_soc *lcdifv3 = platform_get_drvdata(pdev);
+
+	lviconfig_unregister_notifier(&lcdifv3->lviconfig_nb);
 
 	/* undo misc so no leaks */
 	if (lcdifv3->misc.name)

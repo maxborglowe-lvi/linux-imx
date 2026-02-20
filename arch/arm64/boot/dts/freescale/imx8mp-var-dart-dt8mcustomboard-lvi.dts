@@ -134,7 +134,7 @@
 	lvipwm: lvipwm {
 		status = "okay";
 		compatible = "lvi,lvipwm";
-		pwms = <&pwm1 0 255 0>; // PWM controller, channel, period, polarity
+		pwms = <&pwm1 0 65535 0>; // PWM controller, channel, period, polarity
 	};
 };
 

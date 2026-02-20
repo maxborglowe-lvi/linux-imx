@@ -6,6 +6,7 @@
 #include <linux/string.h> // For strcmp, strlen, etc. in kernel
 #include <linux/slab.h> // For kmalloc/kfree
 #include <linux/kernel.h> // For printk, KERN_ERR, etc.
+#include <linux/notifier.h>
 
 // The amount of configuration structs for each type
 #define CONFIG_COLOR_AMT 16
@@ -194,5 +195,13 @@ int ConfigParam_IsInitialized(void);
 void ConfigParam_MarkInitialized(void);
 int ConfigParam_ReadAndSaveParam(ConfigParam *param, uint8_t save, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t));
 int ConfigParam_ReadAndSaveAll(uint8_t save, int (*platform_eeprom_read)(uint32_t, uint8_t *), int (*platform_eeprom_write)(uint32_t, uint8_t));
+
+/* Notifier chain — fired on every ConfigParam data change.
+ * Subscribers receive a pointer to the changed ConfigParam as 'data'.
+ */
+int lviconfig_register_notifier(struct notifier_block *nb);
+int lviconfig_unregister_notifier(struct notifier_block *nb);
+void lviconfig_notify_param_changed(ConfigParam *param);
+void lviconfig_notify_all_params_changed(void);
 
 #endif // LVICONFIG_PARAMETERS_H
