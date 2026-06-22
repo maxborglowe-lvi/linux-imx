@@ -94,4 +94,16 @@ static struct platform_driver dsp_audio_driver = {
 	.probe = dsp_audio_probe,
 	.remove = dsp_audio_remove,
 };
-module_platform_driver(dsp_audio_driver);
+
+static int __init dsp_audio_driver_init(void)
+{
+	return platform_driver_register(&dsp_audio_driver);
+}
+
+static void __exit dsp_audio_driver_exit(void)
+{
+	platform_driver_unregister(&dsp_audio_driver);
+}
+
+/* Register as built-in device; module registration is handled in fsl_dsp.c */
+device_initcall(dsp_audio_driver_init);

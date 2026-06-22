@@ -6,6 +6,7 @@
 #include <linux/pwm.h>
 #include <linux/platform_device.h>
 #include <linux/ioctl.h>
+#include <linux/math64.h>
 
 #include <linux/lviconfig_parameters.h>
 #include <linux/notifier.h>
@@ -24,6 +25,7 @@ struct lvipwm_drvdata {
 	struct pwm_device *pwm;
 	struct cdev cdev;
 	struct pwm_state state; // Per-device state
+	u64 max_duty_cycle;
 	struct device *device;
 	dev_t devno;
 	struct notifier_block lviconfig_nb;
@@ -31,6 +33,19 @@ struct lvipwm_drvdata {
 
 static int major;
 static struct class *pwm_class;
+
+static u64 lvipwm_scale_to_limited_duty(struct lvipwm_drvdata *drvdata,
+						u64 requested_duty)
+{
+	if (!drvdata->state.period)
+		return 0;
+
+	if (requested_duty > drvdata->state.period)
+		requested_duty = drvdata->state.period;
+
+	return div64_u64(requested_duty * drvdata->max_duty_cycle,
+			 drvdata->state.period);
+}
 
 /**
  * lvipwm_lviconfig_notifier - react to a confLighting.Intensity change.
@@ -44,6 +59,7 @@ static int lvipwm_lviconfig_notifier(struct notifier_block *nb,
 		container_of(nb, struct lvipwm_drvdata, lviconfig_nb);
 	ConfigParam *param = (ConfigParam *)data;
 	u64 duty;
+	u64 limited_duty;
 	int ret;
 
 	if (param != &confLighting.Intensity)
@@ -52,18 +68,14 @@ static int lvipwm_lviconfig_notifier(struct notifier_block *nb,
 	duty = confLighting.Intensity.data[0] |
 	       ((u64)confLighting.Intensity.data[1] << 8);
 
-	if (duty > drvdata->state.period) {
-		pr_warn("[lvipwm] notifier: duty %llu exceeds period %llu, capping\n",
-			duty, drvdata->state.period);
-		duty = drvdata->state.period;
-	}
-
-	drvdata->state.duty_cycle = duty;
+	limited_duty = lvipwm_scale_to_limited_duty(drvdata, duty);
+	drvdata->state.duty_cycle = limited_duty;
 	ret = pwm_apply_state(drvdata->pwm, &drvdata->state);
 	if (ret < 0)
 		pr_err("[lvipwm] notifier: pwm_apply_state failed: %d\n", ret);
 	else
-		pr_info("[lvipwm] notifier: duty cycle updated to %llu ns\n", duty);
+		pr_info("[lvipwm] notifier: duty updated req=%llu ns applied=%llu ns\n",
+			duty, limited_duty);
 
 	return NOTIFY_OK;
 }
@@ -73,6 +85,7 @@ static long lvipwm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	struct lvipwm_drvdata *drvdata = file->private_data;
 	struct pwm_device *pwm = drvdata->pwm;
 	unsigned long value;
+	u64 limited_duty;
 	int ret;
 
 	if (!pwm) {
@@ -89,15 +102,18 @@ static long lvipwm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			return -EFAULT;
 		}
 
-		// Validate duty cycle doesn't exceed period
+		// Validate duty cycle doesn't exceed logical period
 		if (value > drvdata->state.period) {
 			pr_err("[%s] Duty cycle %lu exceeds period %llu\n", __func__, value, drvdata->state.period);
 			return -EINVAL;
 		}
 
-		pr_info("[%s] Setting duty cycle to %lu (period=%llu)\n", __func__, value, drvdata->state.period);
+		limited_duty = lvipwm_scale_to_limited_duty(drvdata, value);
 
-		drvdata->state.duty_cycle = value;
+		pr_info("[%s] Setting duty cycle req=%lu ns applied=%llu ns (period=%llu max=%llu)\n",
+			__func__, value, limited_duty, drvdata->state.period, drvdata->max_duty_cycle);
+
+		drvdata->state.duty_cycle = limited_duty;
 		ret = pwm_apply_state(pwm, &drvdata->state);
 		if (ret < 0) {
 			pr_err("[%s] pwm_apply_state failed: %d\n", __func__, ret);
@@ -192,6 +208,8 @@ static int lvipwm_probe(struct platform_device *pdev)
 	struct lvipwm_drvdata *drvdata;
 	struct device *dev = &pdev->dev;
 	struct pwm_args pargs;
+	u32 max_duty_percent;
+	u64 requested_duty;
 	int ret;
 
 	pr_info("[%s] called\n", __func__);
@@ -252,19 +270,32 @@ static int lvipwm_probe(struct platform_device *pdev)
 
 	drvdata->state.period = pargs.period;
 	drvdata->state.polarity = pargs.polarity;
+	drvdata->max_duty_cycle = drvdata->state.period;
 
-	// Read duty cycle from EEPROM config
-	drvdata->state.duty_cycle = confLighting.Intensity.data[0] | (confLighting.Intensity.data[1] << 8);
+	if (!of_property_read_u32(dev->of_node, "lvi,max-duty-percent", &max_duty_percent)) {
+		if (!max_duty_percent || max_duty_percent > 100) {
+			dev_warn(dev, "invalid lvi,max-duty-percent=%u, using 100\n",
+				 max_duty_percent);
+			max_duty_percent = 100;
+		}
 
-	// Validate duty cycle
-	if (drvdata->state.duty_cycle > drvdata->state.period) {
-		pr_warn("[%s] Duty cycle %llu exceeds period %llu, capping\n", __func__, drvdata->state.duty_cycle, drvdata->state.period);
-		drvdata->state.duty_cycle = drvdata->state.period;
+		drvdata->max_duty_cycle = div64_u64(drvdata->state.period * max_duty_percent,
+							100);
 	}
+
+	// Read logical duty cycle from EEPROM config
+	requested_duty = confLighting.Intensity.data[0] |
+			 ((u64)confLighting.Intensity.data[1] << 8);
+	drvdata->state.duty_cycle = lvipwm_scale_to_limited_duty(drvdata, requested_duty);
+
+	if (drvdata->max_duty_cycle > drvdata->state.period)
+		drvdata->max_duty_cycle = drvdata->state.period;
 
 	drvdata->state.enabled = true;
 
-	pr_info("[%s] Initializing PWM: period=%llu ns, duty_cycle=%llu ns, polarity=%d\n", __func__, drvdata->state.period, drvdata->state.duty_cycle, drvdata->state.polarity);
+	pr_info("[%s] Initializing PWM: period=%llu ns, requested=%llu ns, applied=%llu ns, max=%llu ns, polarity=%d\n",
+		__func__, drvdata->state.period, requested_duty, drvdata->state.duty_cycle,
+		drvdata->max_duty_cycle, drvdata->state.polarity);
 
 	ret = pwm_apply_state(drvdata->pwm, &drvdata->state);
 	if (ret < 0) {

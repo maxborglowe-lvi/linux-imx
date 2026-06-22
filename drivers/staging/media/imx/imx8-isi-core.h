@@ -327,11 +327,14 @@ struct mxc_isi_cap_dev {
 
 	struct mxc_isi_frame src_f;
 	struct mxc_isi_frame dst_f;
+	struct v4l2_dv_timings source_timings;
+	struct delayed_work source_monitor_work;
 
 	u32 frame_count;
 	u32 id;
 	u32 is_streaming[MXC_ISI_MAX_DEVS];
 	bool is_link_setup;
+	bool source_monitor_enabled;
 
 	struct mutex lock;
 	spinlock_t   slock;

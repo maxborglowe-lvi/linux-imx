@@ -250,6 +250,8 @@ static void build_param_list(void)
 	all_params[num_params++] = &confCamera.ArtificialColorIris;
 	all_params[num_params++] = &confCamera.ArtificialColorExposureCompensation;
 	all_params[num_params++] = &confCamera.ArtificialColorGainPeak;
+	all_params[num_params++] = &confCamera.MonitoringMode;
+	all_params[num_params++] = &confCamera.LVDSMode;
 	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
 		all_params[num_params++] = &confCameraMode[i].Zoom;
 		all_params[num_params++] = &confCameraMode[i].ZoomMin;
@@ -262,6 +264,8 @@ static void build_param_list(void)
 		all_params[num_params++] = &confCameraMode[i].NaturalColorExposure;
 		all_params[num_params++] = &confCameraMode[i].ArtificialColorExposure;
 		all_params[num_params++] = &confCameraMode[i].WhiteBalance;
+		all_params[num_params++] = &confCameraMode[i].PictureEffect;
+		all_params[num_params++] = &confCameraMode[i].NoiseReduction2D3D;
 	}
 	for (i = 0; i < CONFIG_MONITOR_MODE_AMT; i++) {
 		all_params[num_params++] = &confMonitorMode[i].ColorGainR;
@@ -410,6 +414,8 @@ void ConfigParam_InitAll(void)
 	confCamera.ArtificialColorIris = ConfigParam_Init("ArtificialColorIris", &default_numeric_data, TYPE_8);
 	confCamera.ArtificialColorExposureCompensation = ConfigParam_Init("ArtificialColorExposureCompensation", &default_numeric_data, TYPE_8);
 	confCamera.ArtificialColorGainPeak = ConfigParam_Init("ArtificialColorGainPeak", &default_numeric_data, TYPE_8);
+	confCamera.MonitoringMode = ConfigParam_Init("MonitoringMode", &default_numeric_data, TYPE_8);
+	confCamera.LVDSMode = ConfigParam_Init("LVDSMode", &default_numeric_data, TYPE_8);
 
 	/* INIT CAMERA MODE */
 	for (i = 0; i < CONFIG_CAMERA_MODE_AMT; i++) {
@@ -421,12 +427,14 @@ void ConfigParam_InitAll(void)
 		confCameraMode[i].ZoomMax = ConfigParam_Init("ZoomMax", &default_numeric_data, TYPE_16);
 		confCameraMode[i].ZoomSpeed = ConfigParam_Init("ZoomSpeed", &default_numeric_data, TYPE_16);
 		confCameraMode[i].Focus = ConfigParam_Init("Focus", &default_numeric_data, TYPE_32);
-		confCameraMode[i].FocusMin = ConfigParam_Init("FocusMin", &default_numeric_data, TYPE_32);
-		confCameraMode[i].FocusMax = ConfigParam_Init("FocusMax", &default_numeric_data, TYPE_32);
+		confCameraMode[i].FocusMin = ConfigParam_Init("FocusMin", &default_numeric_data, TYPE_16);
+		confCameraMode[i].FocusMax = ConfigParam_Init("FocusMax", &default_numeric_data, TYPE_16);
 		confCameraMode[i].FocusSpeed = ConfigParam_Init("FocusSpeed", &default_numeric_data, TYPE_32);
-		confCameraMode[i].NaturalColorExposure = ConfigParam_Init("NaturalColorExposure", &default_numeric_data, TYPE_32);
-		confCameraMode[i].ArtificialColorExposure = ConfigParam_Init("ArtificialColorExposure", &default_numeric_data, TYPE_32);
-		confCameraMode[i].WhiteBalance = ConfigParam_Init("WhiteBalance", &default_numeric_data, TYPE_32);
+		confCameraMode[i].NaturalColorExposure = ConfigParam_Init("NaturalColorExposure", &default_numeric_data, TYPE_8);
+		confCameraMode[i].ArtificialColorExposure = ConfigParam_Init("ArtificialColorExposure", &default_numeric_data, TYPE_8);
+		confCameraMode[i].WhiteBalance = ConfigParam_Init("WhiteBalance", &default_numeric_data, TYPE_8);
+		confCameraMode[i].PictureEffect = ConfigParam_Init("PictureEffect", &default_numeric_data, TYPE_8);
+		confCameraMode[i].NoiseReduction2D3D = ConfigParam_Init("NoiseReduction2D3D", &default_numeric_data, TYPE_8);
 	}
 
 	/* INIT MONITOR MODE */
@@ -670,6 +678,10 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 				param = &confCamera.NaturalColorGainPeak;
 			else if (strcmp(token, "ArtificialColorGainPeak") == 0)
 				param = &confCamera.ArtificialColorGainPeak;
+			else if (strcmp(token, "MonitoringMode") == 0)
+				param = &confCamera.MonitoringMode;
+			else if (strcmp(token, "LVDSMode") == 0)
+				param = &confCamera.LVDSMode;
 		}
 	}
 	// Added missing sections based on error log
@@ -712,6 +724,10 @@ ConfigParam *ConfigParam_FindByName(const char *path)
 						param = &confCameraMode[index].ArtificialColorExposure;
 					else if (strcmp(token, "WhiteBalance") == 0)
 						param = &confCameraMode[index].WhiteBalance;
+					else if (strcmp(token, "PictureEffect") == 0)
+						param = &confCameraMode[index].PictureEffect;
+					else if (strcmp(token, "NoiseReduction2D3D") == 0)
+						param = &confCameraMode[index].NoiseReduction2D3D;
 				}
 			}
 		}

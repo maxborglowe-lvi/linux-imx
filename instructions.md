@@ -83,22 +83,23 @@
 
 use the generated defconfig and .config below :)
 
-my_defconfig.config should contain CONFIG_VIDEO_LVICAM=y only.
+my_defconfig.config should contain CONFIG_VIDEO_LVICAM=y, CONFIG_VIDEO_LT6911UXC=y, and CONFIG_CMA_SIZE_MBYTES=320.
 
 ### 6. Build kernel with patches and LVICAM (LVICAM enabled in defconfig)
 
        source /opt/fslc-xwayland/3.3/environment-setup-cortexa53-crypto-fslc-linux
        export LDFLAGS=
 
-       # Place my_defconfig.config inside ~/var-fsl-yocto/local_repos/linux-imx/arch/arch64/configs
+       # Place my_defconfig.config inside ~/var-fsl-yocto/local_repos/linux-imx/arch/arm64/configs
 
        $ cd ~/var-fsl-yocto/local_repos/linux-imx
 
-       $ make ARCH=arm64 menuconfig
+       $ make ARCH=arm64 imx8_var_defconfig
+       $ ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/my_defconfig.config
        $ scripts/config --disable SYSTEM_TRUSTED_KEYS
        $ scripts/config --disable SYSTEM_REVOCATION_KEYS
-       # save default
-       $ make ARCH=arm64 -j8 defconfig imx8_var_defconfig my_defconfig.config
+       $ make ARCH=arm64 olddefconfig
+       $ grep CONFIG_CMA_SIZE_MBYTES .config   # should print 320
        $ make ARCH=arm64 -j8
        # build device-tree
        make ARCH=arm64 freescale/imx8mp-var-dart-dt8mcustomboard-lvi.dtb 
@@ -151,6 +152,95 @@ https://variwiki.com/index.php?title=U-Boot_4.1.15_features
 
         # run in background without printouts:
         gst-launch-1.0 v4l2src device=/dev/video1 ! video/x-raw,width=1920,height=1080,format=NV12 ! waylandsink >/dev/null 2>&1 &
+
+11. 60fps video stream
+
+
+This command works and renders video in ~45fps on yocto:
+
+    gst-launch-1.0 -v v4l2src device=/dev/video2 io-mode=4 \
+    ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=60/1 \
+    ! fpsdisplaysink video-sink=waylandsink sync=false text-overlay=true
+
+
+#### THESE COMMANDS WORK BEST FOR LVICAM. DO NOT REMOVE OR EDIT!!!
+This command works and renders video in ~60fps on yocto:
+
+    gst-launch-1.0 -v v4l2src device=/dev/video2 io-mode=4 \
+  ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=60/1 \
+  ! fpsdisplaysink video-sink=waylandsink sync=false text-overlay=false
+
+Added queuing to remove glitching and hiccups:
+  gst-launch-1.0 -v v4l2src device=/dev/video2 io-mode=4 \
+  ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=60/1 \
+  ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 leaky=downstream \
+  ! fpsdisplaysink video-sink=waylandsink sync=false text-overlay=false
+#### THESE COMMANDS WORK BEST FOR LVICAM. DO NOT REMOVE OR EDIT!!!
+
+
+### HDMI input stream
+
+11. Verify LT6911 HDMI capture
+
+       $ dmesg | grep -i lt6911
+       $ media-ctl -p
+       $ v4l2-ctl --list-devices
+	   $ v4l2-ctl -d /dev/video1 --list-formats-ext
+
+       # Replace /dev/v4l-subdevX with the LT6911 subdevice from media-ctl -p
+       $ v4l2-ctl -d /dev/v4l-subdevX --query-dv-timings
+
+    # view HDMI input from Gstreamer
+       gst-launch-1.0 v4l2src device=/dev/video2 io-mode=4 ! video/x-raw,width=1920,height=1080,format=NV12,framerate=60/1 ! queue max-size-buffers=4 leaky=downstream ! waylandsink sync=false
+
+
+    # Script for autodetecting HDMI input resolution mid-stream:
+    
+        LT_DEBUG=1 ./lt6911_stream.sh auto wayland
+       
+
+12. Run GStreamer from LT6911
+
+#### Verified HDMI input from 1080p30 computer source
+    gst-launch-1.0 v4l2src device=/dev/video2 io-mode=4 ! video/x-raw,width=1920,height=1080,format=NV12,framerate=60/1 ! waylandsink sync=false
+
+    # NOTE: The command above forces 1920x1080 caps. If the HDMI source is
+    # switched to 4K while this pipeline is used, output remains 1080 by design.
+    # For dynamic hotplug mode switching, use lt6911_stream.sh auto below.
+
+
+#### Verified HDMI inputfrom 4k30 camera source:
+gst-launch-1.0 -e v4l2src device=/dev/video2 io-mode=4 \
+  ! video/x-raw,width=3840,height=2160,format=NV12,framerate=30/1 \
+  ! fpsdisplaysink video-sink=waylandsink sync=false text-overlay=false
+
+
+### LT6911 bring-up helper
+
+Run this helper on the target board to resolve the current LT6911/LVICAM
+device nodes, refresh LT6911 timings before HDMI capture, and use the
+known-good pipelines for each source:
+
+        ./lt6911_stream.sh probe
+        ./lt6911_stream.sh hdmi-1080 wayland
+        ./lt6911_stream.sh hdmi-4k wayland
+        ./lt6911_stream.sh lvicam-1080 wayland
+        ./lt6911_stream.sh auto wayland
+        ./lt6911_stream.sh fixed-1080 wayland
+
+Use `kms` instead of `wayland` if Weston is not running, or use `fake`
+to measure capture throughput without display.
+
+`auto` monitors LT6911 DV timings and restarts the HDMI pipeline with
+matching width/height when the source mode changes (for example 1080p60 to 4K30).
+
+`fixed-1080` monitors LT6911 DV timings and restarts the HDMI pipeline with a
+fixed 1920x1080 NV12 output. This is the easiest way to try the fixed-output
+model first: 1080p sources stay 1080p, while 4K sources are expected to be
+downscaled by the ISI path before display.
+
+
+NOTE: The LVICAM stream has changed from video1 to video2, and vice versa for HDMI input.
 
 
 ## External files

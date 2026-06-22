@@ -102,10 +102,8 @@
 
 	extcon_usb1: extcon_usb1 {
         compatible = "linux,extcon-usb-gpio";
-        pinctrl-names = "default";
-        pinctrl-0 = <&pinctrl_extcon0>;
         id-gpio = <&gpio1 10 GPIO_ACTIVE_HIGH>;
-        status = "okay";
+        status = "disabled";
     };
 
 	sound_hdmi: sound_hdmi {
@@ -134,7 +132,12 @@
 	lvipwm: lvipwm {
 		status = "okay";
 		compatible = "lvi,lvipwm";
-		pwms = <&pwm1 0 65535 0>; // PWM controller, channel, period, polarity
+		/*
+		 * Period 10000 ns -> 100 kHz, further above audible range to
+		 * reduce control-loop beat tones from pulsed LED loading.
+		 */
+		pwms = <&pwm1 0 10000 0>; // PWM controller, channel, period(ns), polarity
+		lvi,max-duty-percent = <5>;
 	};
 };
 
@@ -156,45 +159,42 @@
 
 &eqos {
 	mdio {
-		ethphy1: ethernet-phy@1 {
-			compatible = "ethernet-phy-ieee802.3-c22";
-			reg = <1>;
-			at803x,eee-disabled;
-			at803x,vddio-1p8v;
+		ethphy0: ethernet-phy@0 {
+			compatible = "ethernet-phy-id0283.bc30",
+				     "ethernet-phy-ieee802.3-c22";
+			reg = <0>;
 			eee-broken-1000t;
 		};
 	};
 };
 
 &fec {
-    pinctrl-names = "default";
-    pinctrl-0 = <&pinctrl_fec>;
-    phy-mode = "rgmii-id";  /* or "rgmii-txid", "rgmii-rxid" depending on your hardware */
-    phy-handle = <&eth_vsc>;
-    fsl,magic-packet;
-	// phy-reset-gpios = <&pca6416 11 GPIO_ACTIVE_LOW>;
-	phy-reset-duration = <10>;
-	phy-reset-post-delay = <20>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_fec>;
+	phy-mode = "rgmii-rxid";
+	phy-handle = <&eth_adin>;
+	fsl,magic-packet;
 	status = "okay";
 
-    mdio {
-        #address-cells = <1>;
-        #size-cells = <0>;
+	mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
 
-        eth_vsc: ethernet-phy@0 {
-            compatible = "ethernet-phy-id0007.0570";  /* VSC8531 PHY ID */
-            reg = <0>;  /* MDIO address - adjust based on your hardware strapping */
-            
-            /* Optional: if you have a reset GPIO */
-            reset-gpios = <&pca6416 11 GPIO_ACTIVE_LOW>; 
-            reset-assert-us = <10000>; 
-            reset-deassert-us = <80000>; 
-            
-            /* Optional: LED configuration */
-            vsc8531,led-0-mode = <1>;  /* Link/Activity */
-            vsc8531,led-1-mode = <1>;  /* Link/Activity */
-        };
-    };
+		eth_adin: ethernet-phy@0 {
+			compatible = "ethernet-phy-id0283.bc30",
+				     "ethernet-phy-ieee802.3-c22";
+			pinctrl-names = "default";
+			pinctrl-0 = <&pinctrl_adin1300_int>;
+			reg = <0>;
+			interrupt-parent = <&gpio3>;
+			interrupts = <23 IRQ_TYPE_LEVEL_LOW>;
+			reset-gpios = <&pca6416 11 GPIO_ACTIVE_LOW>;
+			reset-assert-us = <10000>;
+			reset-deassert-us = <80000>;
+			adi,rx-internal-delay-ps = <2000>;
+			max-speed = <1000>;
+		};
+	};
 };
 
 &i2c2 {
@@ -221,6 +221,21 @@
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_pca6416>;
+
+		/* TPA2012 gain strap: 11b (P14 = MSB, P15 = LSB) */
+		tpa2012-gain-msb-hog {
+			gpio-hog;
+			gpios = <12 GPIO_ACTIVE_HIGH>; /* P14 */
+			output-high;
+			line-name = "tpa2012-gain-msb"; //GAIN-1
+		};
+
+		tpa2012-gain-lsb-hog {
+			gpio-hog;
+			gpios = <13 GPIO_ACTIVE_HIGH>; /* P15 */
+			output-high;
+			line-name = "tpa2012-gain-lsb"; //GAIN-0
+		};
 
 		
 	};
@@ -253,6 +268,38 @@
         compatible = "lvi,lviconfig";
 		// size = <32768> //size of EEPROM
     };
+
+	/* Lontium LT6911UXC - HDMI 2.0 to MIPI-CSI2 bridge
+	 * Connected to MIPI-CSI port 1 (mipi_csi_1 / ISI channel 0)
+	 *
+	 * I2C address: 0x2B (7-bit, default for LT6911UXC)
+	 * reset-gpios : adjust to your hardware schematic
+	 * interrupts  : adjust GPIO line to your hardware schematic
+	 */
+	lt6911uxc: hdmi-csi-bridge@2b {
+		compatible = "lontium,lt6911uxc";
+		reg = <0x2b>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_lt6911uxc>;
+
+		/* SLEEP pin: GPIO1_IO05, active-high (HIGH = chip asleep) */
+		sleep-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>;
+
+		/* No IRQ GPIO from LT6911 to i.MX8 -- detection is polling-based */
+
+		status = "okay";
+
+		port {
+			lt6911uxc_out: endpoint {
+				remote-endpoint = <&mipi_csi1_ep>;
+				data-lanes = <1 2 3 4>;
+				clock-continuous;
+				link-frequencies = /bits/ 64 <594000000>;
+			};
+		};
+	};
 
 	lvipanel@69 {
 		reg = <0x69>;
@@ -308,8 +355,9 @@
 	mcp4018_vled: digipot@2f { //MCP4018T-503E
         compatible = "microchip,mcp4018-503";
         reg = <0x2f>;                /* I²C address */
-        /* Optional: initial wiper value */
-        microchip,initial-ohms = <2000>;
+		/* Generate ~10V for LED lighting
+		Lower resistance increases output voltage. */
+		microchip,initial-ohms = <9000>;
     };
 
 	csi-bridge@e {
@@ -373,12 +421,18 @@
     //     microchip,initial-ohms = <30000>; //10kohm
     // };
 
-	mcp4018_vcam: digipot@3e { //MCP40D18T-503AE
-        compatible = "microchip,mcp4018-503";  /* MCP40D18 is register-compatible */
+	mcp40d18_vcam: digipot@3e { //MCP40D18T-503AE
+		compatible = "microchip,mcp40d18-503";
         reg = <0x3e>;
-        microchip,initial-ohms = <4800>; //6kohm
+        /* R_FBB = R_FBT * Vref / (Vout - Vref) = 100k * 0.6 / 11.4 = 5263R
+         * -> wiper 13 (0x0D) -> 13 * 393.7 = 5118R -> ~12.3V */
+        microchip,initial-ohms = <5263>; // wiper=13 -> ~12.3V
     };
 
+	lvicharger@9 {
+        compatible = "lvi,lvicharger";
+        reg = <0x09>;
+    };
 	
 	lvibattery@b {
         compatible = "lvi,lvibattery";
@@ -392,17 +446,17 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_extcon0>;
 		reg = <0x3d>;
-		
-		// interrupt-parent = <&gpio1>;
-		// interrupts = <8 IRQ_TYPE_LEVEL_LOW>;
-		// irq-is-id-quirk;
-		status ="okay";
 
-		// port {
-		// 	typec_dr_sw0: endpoint {
-		// 		remote-endpoint = <&usb3_drd_sw0>;
-		// 	};
-		// };
+		interrupt-parent = <&gpio1>;
+		interrupts = <8 IRQ_TYPE_LEVEL_HIGH>;
+		irq-is-id-quirk;
+		status = "okay";
+
+		port {
+			typec_dr_sw0: endpoint {
+				remote-endpoint = <&usb3_drd_sw0>;
+			};
+		};
 	};
 
 	typec@1d {
@@ -562,6 +616,15 @@
 	status = "disabled";
 };
 
+&gpio3 {
+	usb-pwr-hog {
+		gpio-hog;
+		gpios = <22 GPIO_ACTIVE_LOW>;
+		output-low;	/* assert active-low: USB power ON */
+		line-name = "USB_PWR_B";
+	};
+};
+
 &pcie_phy {
 	ext_osc = <1>;
 	status = "okay";
@@ -607,23 +670,18 @@
 &usb_dwc3_0 {
     status = "okay";
     dr_mode = "otg";
-    /*pinctrl-names = "default";
-    pinctrl-0 = <&pinctrl_usb1_otg>;*/
-    extcon = <&extcon_usb1>;
     hnp-disable;
     srp-disable;
     adp-disable;
-    /*
     usb-role-switch;
     role-switch-default-mode = "none";
     snps,dis-u1-entry-quirk;
     snps,dis-u2-entry-quirk;
- 
     port {
         usb3_drd_sw0: endpoint {
             remote-endpoint = <&typec_dr_sw0>;
         };
-    };*/
+    };
 };
 
 //USB2
@@ -642,7 +700,7 @@
 };
 
 &usb_dwc3_1 {
-    dr_mode = "host";
+    dr_mode = "otg";
     pinctrl-names = "default";
     pinctrl-0 = <&pinctrl_usb2_otg>;
     hnp-disable;
@@ -690,11 +748,27 @@
 		reg = <0>;
 		mipi_csi0_ep: endpoint {
 			remote-endpoint = <&tc358746_mipi2_out>;
-			data-lanes = <4>; //Is this right?
-			//For lanes for colorbar
-			//data-lanes = <4>; //Is this right?
+			data-lanes = <4>;
 			csis-hs-settle = <13>;
 			csis-clk-settle = <0>;
+			csis-wclk;
+		};
+	};
+};
+
+/* MIPI-CSI port 1 - connected to LT6911UXC HDMI-to-CSI bridge */
+&mipi_csi_1 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	port@1 {
+		reg = <1>;
+		mipi_csi1_ep: endpoint {
+			remote-endpoint = <&lt6911uxc_out>;
+			data-lanes = <4>;
+			csis-hs-settle = <19>;
+			csis-clk-settle = <2>;
 			csis-wclk;
 		};
 	};
@@ -705,6 +779,8 @@
 };
 
 &isi_0 {
+	/* Route LT6911 on mipi_csi_1 to ISI channel 0. */
+	interface = <3 0 2>;
 	status = "okay";
 
 	cap_device {
@@ -716,7 +792,9 @@
 	};
 };
 
+/* Route LVICAM on mipi_csi_0 to ISI channel 1. */
 &isi_1 {
+	interface = <2 0 2>;
 	status = "okay";
 
 	cap_device {
@@ -739,11 +817,13 @@
 			MX8MP_IOMUXC_HDMI_DDC_SDA__HDMIMIX_HDMI_SDA			0x400001c2
 			MX8MP_IOMUXC_HDMI_HPD__HDMIMIX_HDMI_HPD				0x40000010
 			MX8MP_IOMUXC_HDMI_CEC__HDMIMIX_HDMI_CEC				0x40000010
+			MX8MP_IOMUXC_SAI5_RXD1__GPIO3_IO22					0x19 /* USB power control GPIO, active-low, with pull-up */
 		>;
 	};
 
 	pinctrl_pwm1: pwm1grp {
 		fsl,pins = <
+			/* Weaker drive strength to reduce edge aggressiveness/EMI */
 			MX8MP_IOMUXC_GPIO1_IO01__PWM1_OUT				0x116
 		>;
 	};
@@ -957,7 +1037,7 @@
 
 	pinctrl_can: cangrp {
 		fsl,pins = <
-			MX8MP_IOMUXC_GPIO1_IO06__GPIO1_IO06				0x1c6
+			// MX8MP_IOMUXC_GPIO1_IO06__GPIO1_IO06				0x1c6
 			MX8MP_IOMUXC_SPDIF_RX__GPIO5_IO04				0x16
 		>;
 	};
@@ -993,6 +1073,25 @@
 	pinctrl_lvicam: lvicamgrp {
 		fsl,pins = <
 			MX8MP_IOMUXC_SAI5_RXD0__GPIO3_IO21 0x19
+		>;
+	};
+
+	pinctrl_adin1300_int: adin1300intgrp {
+		fsl,pins = <
+			MX8MP_IOMUXC_SAI5_RXD2__GPIO3_IO23 0x1c6
+		>;
+	};
+
+	/* LT6911UXC interrupt line: SAI3_TXFS -> GPIO5_IO05
+	 * Adjust MX8MP_IOMUXC_* macro and GPIO number to match
+	 * your board's actual wiring.
+	 */
+	pinctrl_lt6911uxc: lt6911uxcgrp {
+		fsl,pins = <
+			/* SLEEP: GPIO1_IO05 output */
+			MX8MP_IOMUXC_GPIO1_IO05__GPIO1_IO05     0x19
+			/* RESET: GPIO1_IO06 output */
+			MX8MP_IOMUXC_GPIO1_IO06__GPIO1_IO06     0x19
 		>;
 	};
 

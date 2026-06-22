@@ -404,6 +404,19 @@ config VIDEO_LVICAM
 	help
 	  TODO
 
+config VIDEO_LT6911UXC
+	tristate "Lontium LT6911UXC HDMI-to-MIPI-CSI2 bridge"
+	depends on VIDEO_V4L2 && I2C && VIDEO_V4L2_SUBDEV_API && MEDIA_CONTROLLER
+	select V4L2_FWNODE
+	help
+	  Support for the Lontium LT6911UXC HDMI 2.0 to MIPI CSI-2 bridge chip.
+	  The chip converts an HDMI 2.0 input (up to 4K@30 / 1080p@60) into a
+	  MIPI CSI-2 output stream suitable for connection to the i.MX8 ISI
+	  capture pipeline.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called lt6911uxc.
+
 config VIDEO_TVP514X
 	tristate "Texas Instruments TVP514x video decoder"
 	depends on VIDEO_V4L2 && I2C

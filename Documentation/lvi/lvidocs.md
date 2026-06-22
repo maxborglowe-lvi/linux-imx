@@ -82,7 +82,12 @@ Events can be transferred between the lvipanel driver and userspace.
 #define IOCTL_WRITE_DATA _IOW('i', 2, char)
 ```
 
+## lvibattery
 
+The `lvibattery.c` driver communicates with a smart battery via SMBUS (100kHz) and also controls the battery charger.
+The battery and charger addresses are 0x0b and 0x09 respectively. The battery is read only and reports the state of the battery, such as charge status, chemistry, etc. The charger is writable, which enables e.g. setting charge current, etc.
+
+Note: An user space interface `lvibattery_app` is used to set charging parameters, which is useful when testing for EMI. Reducing e.g. the charging current may also reduce emmissions from the system.
 
 ## lvirtc
 

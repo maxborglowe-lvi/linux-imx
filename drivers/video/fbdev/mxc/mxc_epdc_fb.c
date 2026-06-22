@@ -162,10 +162,10 @@ struct mxc_epdc_fb_data {
 	struct mxcfb_waveform_modes wv_modes;
 	bool wv_modes_update;
 	u32 *waveform_buffer_virt;
-	u32 waveform_buffer_phys;
+	dma_addr_t waveform_buffer_phys;
 	u32 waveform_buffer_size;
 	u32 *working_buffer_virt;
-	u32 working_buffer_phys;
+	dma_addr_t working_buffer_phys;
 	u32 working_buffer_size;
 	dma_addr_t *phys_addr_updbuf;
 	void **virt_addr_updbuf;
@@ -3319,9 +3319,6 @@ static int mxc_epdc_fb_ioctl(struct fb_info *info, unsigned int cmd,
 			struct mxc_epdc_fb_data *fb_data = info ?
 				(struct mxc_epdc_fb_data *)info:g_fb_data;
 			flush_cache_all();
-			outer_flush_range(fb_data->working_buffer_phys,
-				fb_data->working_buffer_phys +
-				fb_data->working_buffer_size);
 			if (copy_to_user((void __user *)arg,
 				(const void *) fb_data->working_buffer_virt,
 				fb_data->working_buffer_size))
@@ -3329,9 +3326,6 @@ static int mxc_epdc_fb_ioctl(struct fb_info *info, unsigned int cmd,
 			else
 				ret = 0;
 			flush_cache_all();
-			outer_flush_range(fb_data->working_buffer_phys,
-				fb_data->working_buffer_phys +
-				fb_data->working_buffer_size);
 			break;
 		}
 
@@ -5511,8 +5505,6 @@ static void do_dithering_processing_Y1_v1_0(
 	}
 
 	flush_cache_all();
-	outer_flush_range(update_region_phys_ptr, update_region_phys_ptr +
-			update_region->height * update_region->width);
 }
 
 /*
@@ -5570,8 +5562,6 @@ static void do_dithering_processing_Y4_v1_0(
 	}
 
 	flush_cache_all();
-	outer_flush_range(update_region_phys_ptr, update_region_phys_ptr +
-			update_region->height * update_region->width);
 }
 
 static int __init mxc_epdc_fb_init(void)

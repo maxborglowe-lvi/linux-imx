@@ -21,10 +21,12 @@
 #include <linux/slab.h>
 #include <linux/of_graph.h>
 #include <linux/videodev2.h>
+#include <linux/workqueue.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-mem2mem.h>
 #include <media/v4l2-event.h>
+#include <media/v4l2-dv-timings.h>
 #include <media/videobuf2-core.h>
 #include <media/videobuf2-dma-contig.h>
 
@@ -34,6 +36,11 @@
 #define sd_to_cap_dev(ptr)	container_of(ptr, struct mxc_isi_cap_dev, sd)
 static int mxc_isi_cap_streamoff(struct file *file, void *priv,
 				 enum v4l2_buf_type type);
+static struct v4l2_subdev *mxc_get_remote_subdev(struct v4l2_subdev *subdev,
+					 const char *caller);
+static int mxc_isi_source_fmt_init(struct mxc_isi_cap_dev *isi_cap);
+
+#define ISI_SOURCE_MONITOR_INTERVAL_MS	250
 
 struct mxc_isi_fmt mxc_isi_out_formats[] = {
 	{
@@ -261,6 +268,96 @@ static int mxc_isi_pipeline_enable(struct mxc_isi_cap_dev *isi_cap, bool enable)
 	media_graph_walk_cleanup(&graph);
 
 	return ret;
+}
+
+static int mxc_isi_apply_config(struct mxc_isi_cap_dev *isi_cap)
+{
+	struct mxc_isi_dev *mxc_isi = mxc_isi_get_hostdata(isi_cap->pdev);
+
+	if (!mxc_isi)
+		return -EINVAL;
+
+	mxc_isi_channel_init(mxc_isi);
+	mxc_isi_channel_config(mxc_isi, &isi_cap->src_f, &isi_cap->dst_f);
+
+	return 0;
+}
+
+static int mxc_isi_query_remote_dv_timings(struct mxc_isi_cap_dev *isi_cap,
+					   struct v4l2_dv_timings *timings)
+{
+	struct v4l2_subdev *src_sd = mxc_get_remote_subdev(&isi_cap->sd, __func__);
+
+	if (!src_sd)
+		return -ENODEV;
+
+	return v4l2_subdev_call(src_sd, video, query_dv_timings, timings);
+}
+
+static void mxc_isi_source_monitor_work(struct work_struct *work)
+{
+	struct mxc_isi_cap_dev *isi_cap = container_of(to_delayed_work(work),
+						       struct mxc_isi_cap_dev,
+						       source_monitor_work);
+	struct mxc_isi_dev *mxc_isi = mxc_isi_get_hostdata(isi_cap->pdev);
+	struct v4l2_dv_timings timings = {};
+	struct mxc_isi_frame old_src;
+	int ret;
+	bool changed = false;
+
+	if (!READ_ONCE(isi_cap->source_monitor_enabled))
+		return;
+
+	if (!vb2_is_streaming(&isi_cap->vb2_q))
+		return;
+
+	ret = mxc_isi_query_remote_dv_timings(isi_cap, &timings);
+	if (ret == -ENOIOCTLCMD) {
+		WRITE_ONCE(isi_cap->source_monitor_enabled, false);
+		return;
+	}
+	if (ret == -ENOLINK || ret == -ERANGE) {
+		goto reschedule;
+	}
+	if (ret < 0) {
+		dev_dbg(&isi_cap->pdev->dev, "%s: query_dv_timings failed: %d\n",
+			 __func__, ret);
+		goto reschedule;
+	}
+
+	mutex_lock(&isi_cap->lock);
+	old_src = isi_cap->src_f;
+	ret = mxc_isi_source_fmt_init(isi_cap);
+	if (!ret)
+		changed = old_src.width != isi_cap->src_f.width ||
+			 old_src.height != isi_cap->src_f.height ||
+			 old_src.fmt != isi_cap->src_f.fmt;
+
+	if (!ret && changed) {
+		dev_info(&isi_cap->pdev->dev,
+			 "%s: source changed to %ux%u, keeping output %ux%u\n",
+			 __func__, isi_cap->src_f.width, isi_cap->src_f.height,
+			 isi_cap->dst_f.width, isi_cap->dst_f.height);
+
+		mxc_isi_channel_disable(mxc_isi);
+		ret = mxc_isi_apply_config(isi_cap);
+		if (!ret)
+			mxc_isi_channel_enable(mxc_isi, mxc_isi->m2m_enabled);
+	}
+
+	if (!ret)
+		isi_cap->source_timings = timings;
+	mutex_unlock(&isi_cap->lock);
+
+	if (ret < 0)
+		dev_dbg(&isi_cap->pdev->dev, "%s: reconfig failed: %d\n",
+			 __func__, ret);
+
+reschedule:
+	if (READ_ONCE(isi_cap->source_monitor_enabled) &&
+	    vb2_is_streaming(&isi_cap->vb2_q))
+		schedule_delayed_work(&isi_cap->source_monitor_work,
+				      msecs_to_jiffies(ISI_SOURCE_MONITOR_INTERVAL_MS));
 }
 
 // static int mxc_isi_update_buf_paddr(struct mxc_isi_buffer *buf, int memplanes)
@@ -496,7 +593,7 @@ static int cap_vb2_start_streaming(struct vb2_queue *q, unsigned int count)
 			dma_alloc_coherent(&isi_cap->pdev->dev,
 					   PAGE_ALIGN(isi_cap->discard_size[i]),
 					   &isi_cap->discard_buffer_dma[i],
-					   GFP_DMA | GFP_KERNEL);
+					    GFP_DMA | GFP_KERNEL);
 		if (!isi_cap->discard_buffer[i]) {
 			for (j = 0; j < i; j++) {
 				dma_free_coherent(&isi_cap->pdev->dev,
@@ -1107,15 +1204,6 @@ static int mxc_isi_source_fmt_init(struct mxc_isi_cap_dev *isi_cap)
 
 	set_frame_bounds(src_f, src_fmt.format.width, src_fmt.format.height);
 
-	if (dst_f->width > src_f->width || dst_f->height > src_f->height) {
-		dev_err(&isi_cap->pdev->dev,
-			"%s: src:(%d,%d), dst:(%d,%d) Not support upscale\n",
-			__func__,
-			src_f->width, src_f->height,
-			dst_f->width, dst_f->height);
-		return -EINVAL;
-	}
-
 	return 0;
 }
 
@@ -1214,17 +1302,13 @@ static int mxc_isi_config_parm(struct mxc_isi_cap_dev *isi_cap)
 {
 	printk("[%s] call : lvicam", __func__);
 
-	struct mxc_isi_dev *mxc_isi = mxc_isi_get_hostdata(isi_cap->pdev);
 	int ret;
 
 	ret = mxc_isi_source_fmt_init(isi_cap);
 	if (ret < 0)
 		return -EINVAL;
 
-	mxc_isi_channel_init(mxc_isi);
-	mxc_isi_channel_config(mxc_isi, &isi_cap->src_f, &isi_cap->dst_f);
-
-	return 0;
+	return mxc_isi_apply_config(isi_cap);
 }
 
 static int mxc_isi_cap_g_parm(struct file *file, void *fh,
@@ -1291,10 +1375,17 @@ static int mxc_isi_cap_streamon(struct file *file, void *priv,
 
 	isi_cap->is_streaming[isi_cap->id] = 1;
 	mxc_isi->is_streaming = 1;
+	WRITE_ONCE(isi_cap->source_monitor_enabled, true);
+	isi_cap->source_timings.bt.width = 0;
+	isi_cap->source_timings.bt.height = 0;
+	schedule_delayed_work(&isi_cap->source_monitor_work,
+			      msecs_to_jiffies(ISI_SOURCE_MONITOR_INTERVAL_MS));
 
 	return 0;
 
 disable:
+	WRITE_ONCE(isi_cap->source_monitor_enabled, false);
+	cancel_delayed_work_sync(&isi_cap->source_monitor_work);
 	mxc_isi_channel_disable(mxc_isi);
 	vb2_ioctl_streamoff(file, priv, type);
 power:
@@ -1322,6 +1413,8 @@ static int mxc_isi_cap_streamoff(struct file *file, void *priv,
 
 	mxc_isi_pipeline_enable(isi_cap, 0);
 	mxc_isi_channel_disable(mxc_isi);
+	WRITE_ONCE(isi_cap->source_monitor_enabled, false);
+	cancel_delayed_work_sync(&isi_cap->source_monitor_work);
 	ret = vb2_ioctl_streamoff(file, priv, type);
 
 	isi_cap->is_streaming[isi_cap->id] = 0;
@@ -1832,6 +1925,7 @@ static int mxc_isi_register_cap_device(struct mxc_isi_cap_dev *isi_cap,
 	INIT_LIST_HEAD(&isi_cap->out_pending);
 	INIT_LIST_HEAD(&isi_cap->out_active);
 	INIT_LIST_HEAD(&isi_cap->out_discard);
+	INIT_DELAYED_WORK(&isi_cap->source_monitor_work, mxc_isi_source_monitor_work);
 
 	memset(q, 0, sizeof(*q));
 	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -1840,6 +1934,7 @@ static int mxc_isi_register_cap_device(struct mxc_isi_cap_dev *isi_cap,
 	q->ops = &mxc_cap_vb2_qops;
 	q->mem_ops = &vb2_dma_contig_memops;
 	q->buf_struct_size = sizeof(struct mxc_isi_buffer);
+	q->min_buffers_needed = 3;
 	q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
 	q->lock = &isi_cap->lock;
 

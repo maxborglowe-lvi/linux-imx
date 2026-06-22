@@ -67,6 +67,8 @@ typedef struct {
 	ConfigParam ArtificialColorIris;
 	ConfigParam ArtificialColorExposureCompensation;
 	ConfigParam ArtificialColorGainPeak;
+	ConfigParam MonitoringMode;
+	ConfigParam LVDSMode;
 } ConfigCamera;
 
 typedef struct {
@@ -82,6 +84,8 @@ typedef struct {
 	ConfigParam NaturalColorExposure;
 	ConfigParam ArtificialColorExposure;
 	ConfigParam WhiteBalance;
+	ConfigParam PictureEffect;
+	ConfigParam NoiseReduction2D3D;
 } ConfigCameraMode;
 
 typedef struct {

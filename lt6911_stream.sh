@@ -1,0 +1,234 @@
+#!/bin/sh
+
+set -eu
+
+SCRIPT_VERSION="2026-05-05a"
+
+HDMI_DEV="${HDMI_DEV:-/dev/video1}"
+LVICAM_DEV="${LVICAM_DEV:-/dev/video2}"
+IO_MODE="${IO_MODE:-4}"
+POLL_SECS="${POLL_SECS:-2}"
+
+GST_PID=""
+
+usage() {
+	cat <<'EOF'
+Usage:
+  ./lt6911_stream.sh probe
+  ./lt6911_stream.sh hdmi-1080 [wayland|kms|fake]
+  ./lt6911_stream.sh hdmi-4k [wayland|kms|fake]
+  ./lt6911_stream.sh lvicam-1080 [wayland|kms|fake]
+  ./lt6911_stream.sh auto [wayland|kms|fake]
+	./lt6911_stream.sh fixed-1080 [wayland|kms|fake]
+
+Environment overrides:
+  HDMI_DEV=/dev/video1
+  LVICAM_DEV=/dev/video2
+  IO_MODE=4
+  POLL_SECS=2
+EOF
+}
+
+sink_for() {
+	case "${1:-wayland}" in
+		wayland) echo "waylandsink" ;;
+		kms)     echo "kmssink" ;;
+		fake)    echo "fakesink" ;;
+		*)
+			echo "Unknown sink '$1' (use wayland|kms|fake)" >&2
+			exit 2
+			;;
+	esac
+}
+
+find_lt_subdev() {
+	if [ -n "${LT_SUBDEV:-}" ] && [ -e "$LT_SUBDEV" ]; then
+		echo "$LT_SUBDEV"
+		return 0
+	fi
+
+	for d in /dev/v4l-subdev*; do
+		name_file="/sys/class/video4linux/$(basename "$d")/name"
+		[ -e "$d" ] || continue
+		[ -r "$name_file" ] || continue
+		if grep -qi 'lt6911' "$name_file"; then
+			echo "$d"
+			return 0
+		fi
+	done
+
+	if command -v media-ctl >/dev/null 2>&1; then
+		node="$(media-ctl -p 2>/dev/null | sed -n '/lt6911uxc/,$p' | grep -m1 -o '/dev/v4l-subdev[0-9][0-9]*' || true)"
+		if [ -n "$node" ] && [ -e "$node" ]; then
+			echo "$node"
+			return 0
+		fi
+	fi
+
+	for d in /dev/v4l-subdev*; do
+		[ -e "$d" ] || continue
+		if v4l2-ctl -d "$d" --query-dv-timings >/dev/null 2>&1; then
+			echo "$d"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+query_lt_dims() {
+	subdev="$1"
+	out="$(v4l2-ctl -d "$subdev" --query-dv-timings 2>/dev/null || true)"
+
+	width="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*Active width:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+	height="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*Active height:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+
+	if [ -z "$width" ] || [ -z "$height" ]; then
+		return 1
+	fi
+
+	if [ "$width" -le 0 ] || [ "$height" -le 0 ]; then
+		return 1
+	fi
+
+	echo "${width}x${height}"
+}
+
+print_banner() {
+	echo "lt6911_stream.sh version ${SCRIPT_VERSION}" >&2
+}
+
+monitor_hdmi() {
+	mode="$1"
+	sink_arg="$2"
+	lt_subdev="$(find_lt_subdev || true)"
+	if [ -z "$lt_subdev" ]; then
+		echo "Could not find LT6911 subdev. Set LT_SUBDEV=/dev/v4l-subdevX and retry." >&2
+		exit 1
+	fi
+	echo "Using LT6911 subdev: $lt_subdev" >&2
+
+	last_dims=""
+	while :; do
+		dims="$(query_lt_dims "$lt_subdev" || true)"
+		if [ "${LT_DEBUG:-0}" = "1" ]; then
+			echo "Raw queried dims: ${dims:-<none>}" >&2
+		fi
+
+		if [ -z "$dims" ]; then
+			if [ -n "$last_dims" ]; then
+				echo "No HDMI signal; stopping stream" >&2
+				stop_gst_bg
+				last_dims=""
+			fi
+			sleep "$POLL_SECS"
+			continue
+		fi
+
+		if [ "$dims" != "$last_dims" ]; then
+			width="${dims%x*}"
+			height="${dims#*x}"
+			case "$mode" in
+				dynamic)
+					echo "Detected HDMI timing change: ${dims}" >&2
+					caps="video/x-raw,width=${width},height=${height},format=NV12"
+					;;
+				fixed-1080)
+					echo "Detected HDMI timing change: ${dims} (forcing 1920x1080 output)" >&2
+					caps="video/x-raw,width=1920,height=1080,format=NV12"
+					;;
+			esac
+			stop_gst_bg
+			start_gst_bg "$HDMI_DEV" "$caps" "$sink_arg"
+			last_dims="$dims"
+		fi
+
+		sleep "$POLL_SECS"
+	done
+}
+
+run_gst() {
+	dev="$1"
+	caps="$2"
+	sink="$3"
+	sink_elem="$(sink_for "$sink")"
+
+	exec gst-launch-1.0 -e v4l2src device="$dev" io-mode="$IO_MODE" ! $caps ! fpsdisplaysink video-sink="$sink_elem" sync=false text-overlay=false
+}
+
+start_gst_bg() {
+	dev="$1"
+	caps="$2"
+	sink="$3"
+	sink_elem="$(sink_for "$sink")"
+
+	gst-launch-1.0 -e v4l2src device="$dev" io-mode="$IO_MODE" ! $caps ! fpsdisplaysink video-sink="$sink_elem" sync=false text-overlay=false >/tmp/lt6911_stream.log 2>&1 &
+	GST_PID="$!"
+	echo "Started gst-launch PID=$GST_PID caps='$caps'" >&2
+}
+
+stop_gst_bg() {
+	if [ -n "$GST_PID" ] && kill -0 "$GST_PID" 2>/dev/null; then
+		kill "$GST_PID" 2>/dev/null || true
+		wait "$GST_PID" 2>/dev/null || true
+	fi
+	GST_PID=""
+}
+
+on_exit() {
+	stop_gst_bg
+}
+
+cmd="${1:-}"
+sink="${2:-wayland}"
+
+print_banner
+
+case "$cmd" in
+	probe)
+		echo "HDMI capture node: $HDMI_DEV"
+		echo "LVICAM capture node: $LVICAM_DEV"
+		for d in /dev/v4l-subdev*; do
+			name_file="/sys/class/video4linux/$(basename "$d")/name"
+			[ -e "$d" ] || continue
+			if [ -r "$name_file" ]; then
+				echo "Subdev $(basename "$d"): $(cat "$name_file")"
+			fi
+		done
+		lt_subdev="$(find_lt_subdev || true)"
+		if [ -n "$lt_subdev" ]; then
+			echo "LT6911 subdev: $lt_subdev"
+			v4l2-ctl -d "$lt_subdev" --query-dv-timings || true
+		else
+			echo "LT6911 subdev: not found"
+		fi
+		v4l2-ctl -d "$HDMI_DEV" --list-formats-ext || true
+		;;
+
+	hdmi-1080)
+		run_gst "$HDMI_DEV" "video/x-raw,width=1920,height=1080,format=NV12,framerate=60/1" "$sink"
+		;;
+
+	hdmi-4k)
+		run_gst "$HDMI_DEV" "video/x-raw,width=3840,height=2160,format=NV12,framerate=30/1" "$sink"
+		;;
+
+	lvicam-1080)
+		run_gst "$LVICAM_DEV" "video/x-raw,width=1920,height=1080,format=YUY2,framerate=60/1" "$sink"
+		;;
+
+	auto)
+		trap on_exit INT TERM EXIT
+		monitor_hdmi dynamic "$sink"
+		;;
+
+	fixed-1080)
+		trap on_exit INT TERM EXIT
+		monitor_hdmi fixed-1080 "$sink"
+		;;
+
+	*)
+		usage
+		exit 2
+		;;
+esac

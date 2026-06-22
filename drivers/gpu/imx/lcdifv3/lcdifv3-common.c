@@ -827,12 +827,12 @@ static int lcdifv3_lviconfig_notifier(struct notifier_block *nb,
 	g_gain     = *(confMonitorMode[0].ColorGainG.data);
 	b_gain     = *(confMonitorMode[0].ColorGainB.data);
 
-	if (brightness == 0 && contrast == 0 && saturation == 0) {
+	if (brightness == 0xFF && contrast == 0xFF && saturation == 0xFF) {
 		brightness = 128;
 		contrast   = 128;
 		saturation = 128;
 	}
-	if (r_gain == 0 && g_gain == 0 && b_gain == 0) {
+	if (r_gain == 0xFF && g_gain == 0xFF && b_gain == 0xFF) {
 		r_gain = 128;
 		g_gain = 128;
 		b_gain = 128;
@@ -983,13 +983,13 @@ skip_ioctl:
 	int g_gain = *(confMonitorMode[0].ColorGainG.data);
 	int b_gain = *(confMonitorMode[0].ColorGainB.data);
 
-	if (brightness == 0 && contrast == 0 && saturation == 0) {
+	if (brightness == 0xFF && contrast == 0xFF && saturation == 0xFF) {
 		brightness = 128;
 		contrast = 128;
 		saturation = 128;
 	}
 
-	if (r_gain == 0 && g_gain == 0 && b_gain == 0) {
+	if (r_gain == 0xFF && g_gain == 0xFF && b_gain == 0xFF) {
 		r_gain = 128;
 		g_gain = 128;
 		b_gain = 128;

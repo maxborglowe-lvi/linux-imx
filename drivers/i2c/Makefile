@@ -18,7 +18,6 @@ obj-y				+= algos/ busses/ muxes/
 obj-$(CONFIG_I2C_STUB)		+= i2c-stub.o
 obj-$(CONFIG_I2C_SLAVE_EEPROM)	+= i2c-slave-eeprom.o
 obj-$(CONFIG_I2C_SLAVE_TESTUNIT)	+= i2c-slave-testunit.o
-# obj-$(CONFIG_I2C_LVICONFIG)		+= lviconfig.o
 obj-$(CONFIG_I2C_LVIBATTERY)		+= lvibattery.o
 obj-$(CONFIG_CAT5157_DPOT) += cat5157_dpot.o
 

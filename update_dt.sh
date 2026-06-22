@@ -2,15 +2,16 @@
 source /opt/fslc-xwayland/3.3/environment-setup-cortexa53-crypto-fslc-linux
 export LDFLAGS=
 
-# Load the default config first, then apply your custom config
-make ARCH=arm64 defconfig imx8_var_defconfig my_defconfig.config
-make ARCH=arm64
+BUILD_DIR=${BUILD_DIR:-$(pwd)}
 
-# Build the device tree for LVI carrierboard
-make ARCH=arm64 freescale/imx8mp-var-dart-dt8mcustomboard-lvi.dtb
+if [[ "${REGEN_CONFIG:-0}" == "1" ]]; then
+    make O="$BUILD_DIR" ARCH=arm64 defconfig imx8_var_defconfig my_defconfig.config
+else
+    # Silently merge any config changes without updating timestamp if unchanged
+    make O="$BUILD_DIR" ARCH=arm64 olddefconfig
+fi
 
-# Build the device tree for Variscite carrierboard
-# make ARCH=arm64 freescale/imx8mp-var-dart-dt8mcustomboard-variscite.dtb
-
+make O="$BUILD_DIR" ARCH=arm64 -j$(nproc)
+make O="$BUILD_DIR" ARCH=arm64 freescale/imx8mp-var-dart-dt8mcustomboard-lvi.dtb
 
 ./install.sh
