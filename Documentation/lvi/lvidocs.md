@@ -156,3 +156,18 @@ This is particularily useful if you're *experimenting* with values for a new dis
 **File**: `drivers/power/supply/tps55287_pmic.c`
 
 Driver for the **Texas Instruments TPS55287 PMIC**. This is used by `lvicam.c` to provide stable power to the camera and display. The output voltage of this chip can be configured in the **device tree** by setting the value of the parameter `ti,vout-microvolt` in the `tps55287` node.
+
+
+# TROUBLESHOOTING
+
+Building the kernel with the current changes can be done using this command:
+
+```
+sudo ./update_dt.sh
+```
+
+If this fails, try to first regenerate the config using this command instead:
+
+```
+sudo -E REGEN_CONFIG=1 ./update_dt.sh"
+```

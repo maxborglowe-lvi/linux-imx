@@ -420,6 +420,23 @@ static int tps55287_probe(struct i2c_client *client)
 	return 0;
 }
 
+static void tps55287_shutdown(struct i2c_client *client)
+{
+	struct tps55287 *tps = i2c_get_clientdata(client);
+	int ret;
+
+	pr_emerg("tps55287: shutdown called\n");
+
+	ret = regmap_update_bits(tps->regmap, TPS55287_REG_MODE,
+				 TPS55287_MODE_OE, 0);
+	pr_emerg("tps55287: clear OE returned %d\n", ret);
+
+	ret = regmap_update_bits(tps->regmap, TPS55287_REG_MODE,
+				 TPS55287_MODE_FORCE_DISCHG,
+				 TPS55287_MODE_FORCE_DISCHG);
+	pr_emerg("tps55287: set FORCE_DISCHG returned %d\n", ret);
+}
+
 static int tps55287_remove(struct i2c_client *client)
 {
 	/* Optionally: clear OE to turn off output */
@@ -442,6 +459,7 @@ static struct i2c_driver tps55287_driver = {
 	},
 	.probe_new = tps55287_probe,
 	.remove = tps55287_remove,
+	.shutdown = tps55287_shutdown,
 };
 module_i2c_driver(tps55287_driver);
 

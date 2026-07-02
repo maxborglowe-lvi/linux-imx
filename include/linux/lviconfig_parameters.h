@@ -27,6 +27,13 @@ typedef struct {
 	uint8_t size;
 } ConfigParam;
 
+/** Below are the parameters that can be set in the LVI End User Configuration (EUC).
+ * These parameters are initialized with default values and can be accessed and modified by other kernel modules.
+ * They are used to store configuration settings for various components of the system, such as camera settings.
+ * 
+ * Next to each parameter is a comment explaining how the values should be set.
+ */
+
 typedef struct {
 	const char *name;
 	ConfigParam Seesaw;
@@ -69,6 +76,11 @@ typedef struct {
 	ConfigParam ArtificialColorGainPeak;
 	ConfigParam MonitoringMode;
 	ConfigParam LVDSMode;
+	ConfigParam MDEnable;
+	ConfigParam MDThreshold;
+	ConfigParam MDIntervalTime;
+	ConfigParam MDStartPos;
+	ConfigParam MDStopPos;
 } ConfigCamera;
 
 typedef struct {
@@ -78,14 +90,16 @@ typedef struct {
 	ConfigParam ZoomMax;
 	ConfigParam ZoomSpeed;
 	ConfigParam Focus;
+	ConfigParam FocusPos;
 	ConfigParam FocusMin;
 	ConfigParam FocusMax;
-	ConfigParam FocusSpeed;
+	ConfigParam FocusAFSpeed;
+	ConfigParam FocusAFMode;					/** Focus mode setting.   */
 	ConfigParam NaturalColorExposure;
 	ConfigParam ArtificialColorExposure;
 	ConfigParam WhiteBalance;
-	ConfigParam PictureEffect;
-	ConfigParam NoiseReduction2D3D;
+	ConfigParam PictureEffect;				/** Picture effect overlay.  */
+	ConfigParam NoiseReduction2D3D;			/** Separate 2D and 3D noise reduction levels. 0xPQ: P = 2D value (0-5), Q = 3D value (0-5) */
 } ConfigCameraMode;
 
 typedef struct {

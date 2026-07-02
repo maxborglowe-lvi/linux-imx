@@ -16,13 +16,15 @@ typedef struct lvicam_cameramode_config {
 	uint16_t ZoomMax;
 	uint16_t ZoomSpeed;
 	uint16_t ZoomSteps; // How many steps are needed to go from min to max zoom (direct mode)
-	uint32_t Focus;
-	uint32_t FocusMin;
-	uint32_t FocusMax;
-	uint32_t FocusSpeed;
-	uint32_t NaturalColorExposure;
-	uint32_t ArtificialColorExposure;
-	uint32_t WhiteBalance;
+	uint8_t Focus;
+	uint16_t FocusPos;
+	uint16_t FocusMin;
+	uint16_t FocusMax;
+	uint8_t FocusAFSpeed;
+	uint8_t FocusAFMode;
+	uint8_t NaturalColorExposure;
+	uint8_t ArtificialColorExposure;
+	uint8_t WhiteBalance;
 	uint8_t PictureEffect;
 	uint8_t NoiseReduction2D3D;
 	uint8_t NoiseReduction2D;
@@ -31,6 +33,12 @@ typedef struct lvicam_cameramode_config {
 	uint8_t DZoom; //digital zoom position 0x00-0xEB
 	uint8_t DZoomOnOff; // 0 = Off, 1 = On
 	uint8_t DZoomMode; // 0 = Combine, 1 = Separate
+
+	uint8_t MDEnable;
+	uint8_t MDThreshold;
+	uint8_t MDIntervalTime;
+	uint16_t MDStartPos; // high byte = start horizontal, low byte = start vertical
+	uint16_t MDStopPos;  // high byte = stop horizontal, low byte = stop vertical
 
 } lvicam_cameramode_config_t;
 
@@ -41,6 +49,7 @@ typedef struct lvicam_cameramode_config {
 #define LVICAM_CTRL_IOCTL_WRITE_DATA _IOW(LVICAM_IOC_MAGIC, 2, struct lvicam_i2c_cmd)
 #define LVICAM_CTRL_IOCTL_READ_SEESAW _IOR(LVICAM_IOC_MAGIC, 3, struct lvicam_seesaw_status)
 #define LVICAM_CTRL_IOCTL_SET_CAMERAMODE _IOW(LVICAM_IOC_MAGIC, 4, struct lvicam_cameramode_config)
+#define LVICAM_CTRL_IOCTL_TRIGGER_CAMERA_MODE _IO(LVICAM_IOC_MAGIC, 5)
 
 enum register_type { REG_TYPE_FPGA = 0, REG_TYPE_VISCA = 1 };
 
@@ -59,6 +68,7 @@ struct lvicam_seesaw_status {
 
 // FPGA Status Register: 0x80
 #define FPGA_FLAGS_INIT_STATUS_REG 0x80
+#define MOTION_DETECT_POLL_MS 500
 
 typedef struct {
 	uint8_t reserved1 : 1; // Bit 0: Reserved
@@ -157,6 +167,11 @@ typedef struct {
 #define VISCA_CMD_NR_3D 0x26
 #define VISCA_CMD_MONITORING_MODE 0x27
 #define VISCA_CMD_LVDS_MODE 0x28
+#define VISCA_CMD_MD_ENABLE        0x29
+#define VISCA_CMD_MD_THRESHOLD     0x2A
+#define VISCA_CMD_MD_INTERVAL_TIME 0x2B
+#define VISCA_CMD_MD_START_POS     0x2C
+#define VISCA_CMD_MD_STOP_POS      0x2D
 
 /*
  * REG_TYPE_VISCA inquiries return the driver-maintained setup state used by
@@ -219,6 +234,35 @@ typedef struct {
 // NOTE: Sub Address not clearly defined in doc (marked as 0x??), define as placeholder
 #define ACTIVATED_FUNCTIONS_CONTROL_REG 0x20 // [7:0] Write (bitmask)
 #define ACT_FUNC_BITMASK_OBJECT_SHOW_VIEW (1 << 0) // Example use: Bit 0 toggles ObjectShowView
+
+#define CAM_REG_ZOOM 0x07
+enum zoom_mode {
+	ZOOM_STOP = 0x00,
+	ZOOM_TELE = 0x02,
+	ZOOM_WIDE = 0x03,
+	ZOOM_TELE_VARIABLE = 0x20, // set lower nibble to change tele zoom
+	ZOOM_WIDE_VARIABLE = 0x30, // set lower nibble to change wide zoom
+
+};
+#define CAM_REG_ZOOM_DIRECT 0x47
+
+#define CAM_REG_DZOOM 0x06
+enum dzoom_mode {
+	DZOOM_ON = 0x02,
+	DZOOM_OFF = 0x03,
+	DZOOM_STOP = 0x00,
+	DZOOM_TELE_VARIABLE = 0x20,
+	DZOOM_WIDE_VARIABLE = 0x30,
+	DZOOM_1_DIV_MAX = 0x10,
+};
+
+#define CAM_REG_DZOOM_MODE 0x36
+enum dzoom_style {
+	DZOOM_MODE_COMBINE = 0x00,
+	DZOOM_MODE_SEPARATE = 0x01,
+};
+
+#define CAM_REG_DZOOM_DIRECT 0x46
 
 #define CAM_REG_EXP_COMP_ONOFF 0x3E
 enum exp_comp_onoff {
@@ -382,6 +426,49 @@ enum monitoring_mode {
 enum lvds_mode {
 	LVDS_MODE_SINGLE = 0x00,
 	LVDS_MODE_DUAL = 0x02
+};
+
+#define CAM_REG_AF_SPEED 0x7E
+enum af_speed {
+	AF_SPEED_NORMAL = 0x00,
+	AF_SPEED_HIGH = 0x01
+};
+
+#define CAM_REG_FREEZE 0x62
+enum freeze_mode {
+	FREEZE_MODE_ON = 0x02,
+	FREEZE_MODE_OFF = 0x03
+};
+
+
+#define CAM_REG_MD 0x1B
+enum md_mode {
+	MD_MODE_ON = 0x02,
+	MD_MODE_OFF = 0x03
+};
+#define CAM_REG_MD_FUNCTION_SET 0x1C
+enum md_display_mode {
+	MD_DISPLAY_MODE_OFF = 0x00,
+	MD_DISPLAY_MODE_ON = 0x01,
+};
+enum md_detection_frame {
+	MD_DETECTION_FRAME0 = 0x01,
+	MD_DETECTION_FRAME1 = 0x02,
+	MD_DETECTION_FRAME2 = 0x04,
+	MD_DETECTION_FRAME3 = 0x08
+};
+
+#define CAM_REG_MD_WINDOW_SET 0x1D
+enum md_select_detection_frame {
+	MD_SELECT_DETECTION_FRAME0 = 0x01,
+	MD_SELECT_DETECTION_FRAME1 = 0x02,
+	MD_SELECT_DETECTION_FRAME2 = 0x03,
+	MD_SELECT_DETECTION_FRAME3 = 0x04
+};
+
+enum color_mode{
+	COLOR_MODE_ARTIFICIAL = 0,
+	COLOR_MODE_NATURAL = 1,
 };
 
 #endif // LVICAM_CTRL_H
