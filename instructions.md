@@ -121,10 +121,9 @@ Press any key when booting the dev kit to enter u-boot.
 https://variwiki.com/index.php?title=U-Boot_4.1.15_features
 
        => setenv ipaddr 10.42.0.2    // device ip
-       => setenv serverip 10.42.0.1  // host ip
+       => setenv serverip 10.152.176.199  // host ip
        => setenv nfsroot /home/maxborglowe/var-fsl-yocto/rootfs
        => setenv bootcmd 'run netboot'
-       # Full HD (working)EXT REF_CLK is used!.
        => setenv fdt_file imx8mp-var-dart-dt8mcustomboard-lvi.dtb
        => saveenv
        => boot
@@ -170,7 +169,8 @@ This command works and renders video in ~60fps on yocto:
   ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=60/1 \
   ! fpsdisplaysink video-sink=waylandsink sync=false text-overlay=false
 
-Added queuing to remove glitching and hiccups:
+Added queuing to remove glitching and hiccups.
+This runs the camera stream in thebackground so that you can execute commands in parallel:
   gst-launch-1.0 -v v4l2src device=/dev/video2 io-mode=4 \
   ! video/x-raw,format=YUY2,width=1920,height=1080,framerate=60/1 \
   ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 leaky=downstream \
