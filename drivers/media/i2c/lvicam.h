@@ -68,7 +68,16 @@ struct lvicam_seesaw_status {
 
 // FPGA Status Register: 0x80
 #define FPGA_FLAGS_INIT_STATUS_REG 0x80
-#define MOTION_DETECT_POLL_MS 500
+
+/* Background poll interval for FPGA_FLAGS_INIT_STATUS_REG */
+#define FPGA_FLAGS_POLL_MS 250
+
+/* Bit masks for FPGA_FLAGS_INIT_STATUS_REG flags (consumers use these for read/peek) */
+#define FPGA_FLAG_NETWORK_CHANGE      (1 << 3)
+#define FPGA_FLAG_MOTION_DETECT       (1 << 4)
+#define FPGA_FLAG_VISCA_ERROR         (1 << 5)
+#define FPGA_FLAG_VISCA_ACK           (1 << 6)
+#define FPGA_FLAG_VISCA_ENABLE        (1 << 7)
 
 typedef struct {
 	uint8_t reserved1 : 1; // Bit 0: Reserved

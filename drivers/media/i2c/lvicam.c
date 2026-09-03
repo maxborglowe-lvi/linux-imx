@@ -83,7 +83,12 @@ struct lvicam {
 	struct gpio_desc *onoff_gpio;
 	struct delayed_work camera_mode_work;
 	struct delayed_work motion_detect_work;
+	struct delayed_work fpga_flags_work;
 	bool pending_camera_mode_apply;
+	bool motion_detect_prev;
+	spinlock_t flags_lock;
+	uint8_t cached_flags;
+	wait_queue_head_t flags_wq;
 
 	struct notifier_block lviconfig_nb;
 
@@ -92,6 +97,7 @@ struct lvicam {
 	unsigned int active_mode_index;
 	uint16_t saved_zoom[2]; /* per-mode saved zoom positions; 0 = use config default */
 	int seesaw_override; /* -1 = use GPIO, 0/1 = forced mode */
+	bool network_change_ready; /* FPGA camera link ready; reset before power-cycle retry */
 };
 
 static const struct v4l2_mbus_framefmt tc358746_def_fmt = {
@@ -386,15 +392,12 @@ static const visca_cmd_t cmd_md_window_set = {
 	.size = 10,
 };
 
-
-
 static const visca_cmd_t cmd_cancel = {
 	.data = { 0x81, 0x20, 0xFF },
 	.size = 3,
 };
 
 //
-
 
 /* ############### END BASE COMMANDS #################*/
 
@@ -429,7 +432,8 @@ static visca_cmd_t cam_dzoom_direct(uint8_t zoom_value)
 	return cmd;
 };
 
-static visca_cmd_t cam_wb_mode(uint8_t mode){
+static visca_cmd_t cam_wb_mode(uint8_t mode)
+{
 	visca_cmd_t cmd = cmd_wb_mode;
 	cmd.data[4] = mode & 0x0F;
 	return cmd;
@@ -453,13 +457,15 @@ static visca_cmd_t cam_b_gain_direct(uint8_t value)
 	return cmd;
 };
 
-static visca_cmd_t cam_ae_mode(enum ae_mode mode){
+static visca_cmd_t cam_ae_mode(enum ae_mode mode)
+{
 	visca_cmd_t cmd = cmd_ae_mode;
 	cmd.data[4] = mode & 0x0F;
 	return cmd;
 }
 
-static visca_cmd_t cam_picture_effect(enum picture_effect_mode mode){
+static visca_cmd_t cam_picture_effect(enum picture_effect_mode mode)
+{
 	visca_cmd_t cmd = cmd_picture_effect;
 	cmd.data[4] = mode & 0xFF;
 	return cmd;
@@ -496,7 +502,8 @@ static visca_cmd_t cam_lr_reverse(enum lr_reverse_mode mode)
 	return cmd;
 };
 
-static visca_cmd_t cam_hr(enum hr_mode mode){
+static visca_cmd_t cam_hr(enum hr_mode mode)
+{
 	visca_cmd_t cmd = cmd_hr;
 	cmd.data[4] = mode & 0x0F;
 	return cmd;
@@ -629,7 +636,7 @@ static visca_cmd_t cam_zoom(enum zoom_mode mode, uint8_t value)
 {
 	visca_cmd_t cmd = cmd_zoom;
 	cmd.data[4] = mode & 0x0F;
-	if(mode == ZOOM_TELE_VARIABLE || mode == ZOOM_WIDE_VARIABLE)
+	if (mode == ZOOM_TELE_VARIABLE || mode == ZOOM_WIDE_VARIABLE)
 		cmd.data[4] = mode | (value & 0x0F);
 	return cmd;
 };
@@ -641,7 +648,8 @@ static visca_cmd_t cam_freeze(enum freeze_mode mode)
 	return cmd;
 };
 
-static visca_cmd_t cam_cancel(uint8_t socket){
+static visca_cmd_t cam_cancel(uint8_t socket)
+{
 	visca_cmd_t cmd = cmd_cancel;
 	cmd.data[1] |= (socket & 0x0F);
 	return cmd;
@@ -672,9 +680,11 @@ static visca_cmd_t cam_md_window_set(enum md_select_detection_frame frame, uint8
 	cmd.data[4] = frame & 0x0F;
 	cmd.data[5] = start_hor_pos & 0x3C;
 	cmd.data[6] = start_ver_pos & 0x28;
-	if(stop_hor_pos < 0) stop_hor_pos = 1;
+	if (stop_hor_pos < 0)
+		stop_hor_pos = 1;
 	cmd.data[7] = stop_hor_pos & 0x3C;
-	if(stop_ver_pos < 0) stop_ver_pos = 1;
+	if (stop_ver_pos < 0)
+		stop_ver_pos = 1;
 	cmd.data[8] = stop_ver_pos & 0x28;
 	return cmd;
 };
@@ -783,9 +793,7 @@ static visca_cmd_t cam_reg_tele_limit(uint8_t value)
 	return cam_register_set(0x51, value);
 };
 
-
 /* ############### END CAMERA COMMANDS ################# */
-
 
 /* ############## BEGIN LVI/VISCA HELPERS ################# */
 static uint8_t lvicam_zoom_to_dzoom(uint16_t zoom, uint16_t max_zoom)
@@ -1294,7 +1302,7 @@ static int lvicam_s_power(struct v4l2_subdev *sd, int on)
 	if (on) {
 		pr_info("[%s] Asserting power pin.\n", __func__);
 		if (lvicam->power_gpio)
-			gpiod_set_value(lvicam->power_gpio, 1);
+			gpiod_set_value_cansleep(lvicam->power_gpio, 1);
 
 		pr_info("[%s] Resetting Toshiba converter chip.\n", __func__);
 		lvicam_gpio_reset(lvicam);
@@ -1512,6 +1520,65 @@ static int fpga_i2c_read_multi(uint8_t reg, uint8_t *data, size_t len)
 	return 0;
 }
 
+/*
+ * FPGA Flags cache — background poller + per-bit clear-on-read accessors.
+ *
+ * lvicam_fpga_flags_work  continuously polls FPGA_FLAGS_INIT_STATUS_REG
+ * and stores the raw value in cached_flags.  Consumers read from the
+ * cache instead of issuing their own I2C transfers, eliminating bus
+ * contention with zoom / VISCA / motion-detect code paths.
+ *
+ *   lvicam_flags_peek(mask) — non-destructive read (for wait conditions)
+ *   lvicam_flags_read(mask) — atomically read & clear the requested bits
+ */
+
+static void lvicam_fpga_flags_work(struct work_struct *work)
+{
+	struct delayed_work *dw = to_delayed_work(work);
+	struct lvicam *lv = container_of(dw, struct lvicam, fpga_flags_work);
+	uint8_t raw;
+
+	if (fpga_i2c_read(FPGA_FLAGS_INIT_STATUS_REG, &raw) == 0) {
+		spin_lock(&lv->flags_lock);
+		lv->cached_flags = raw;
+		spin_unlock(&lv->flags_lock);
+		wake_up(&lv->flags_wq);
+
+		pr_info("[lvicam] FPGA_FLAGS_INIT_STATUS_REG = 0x%02X: "
+			"ena=%u ack=%u err=%u motion=%u net=%u\n",
+			raw, (raw >> 7) & 1, (raw >> 6) & 1, (raw >> 5) & 1, (raw >> 4) & 1, (raw >> 3) & 1);
+	}
+
+	mod_delayed_work(system_wq, &lv->fpga_flags_work, msecs_to_jiffies(FPGA_FLAGS_POLL_MS));
+}
+
+static uint8_t lvicam_flags_peek(uint8_t mask)
+{
+	struct lvicam *lv = lvicam_ctrl.lvicam_ptr;
+	unsigned long flags;
+	uint8_t val;
+
+	spin_lock_irqsave(&lv->flags_lock, flags);
+	val = lv->cached_flags & mask;
+	spin_unlock_irqrestore(&lv->flags_lock, flags);
+
+	return val;
+}
+
+static uint8_t lvicam_flags_read(uint8_t mask)
+{
+	struct lvicam *lv = lvicam_ctrl.lvicam_ptr;
+	unsigned long irqflags;
+	uint8_t val;
+
+	spin_lock_irqsave(&lv->flags_lock, irqflags);
+	val = lv->cached_flags & mask;
+	lv->cached_flags &= ~mask;
+	spin_unlock_irqrestore(&lv->flags_lock, irqflags);
+
+	return val;
+}
+
 #define NETWORK_CHANGE_TIMEOUT_MS 5000
 
 /**
@@ -1521,39 +1588,27 @@ static int fpga_i2c_read_multi(uint8_t reg, uint8_t *data, size_t len)
  */
 static int lvicam_fpga_wait_network_change(void)
 {
-	static bool network_change_ready;
+	struct lvicam *lv = lvicam_ctrl.lvicam_ptr;
 	unsigned long timeout = jiffies + msecs_to_jiffies(NETWORK_CHANGE_TIMEOUT_MS);
-	FPGAFlagsInit_t flags;
-	uint8_t raw = 0;
-	int ret;
+	uint8_t raw;
 
-	if (network_change_ready)
+	if (lv && lv->network_change_ready)
 		return 0;
 
 	do {
-		ret = fpga_i2c_read(FPGA_FLAGS_INIT_STATUS_REG, &raw);
-		if (ret)
-			return ret;
-
-		memcpy(&flags, &raw, sizeof(flags));
-
-		pr_info("[lvicam] FPGA_FLAGS_INIT_STATUS_REG (0x%02X): "
-			"visca_enable=%u visca_ack=%u visca_error=%u "
-			"motion_detect_alarm=%u network_change=%u "
-			"system_camera_pll_lock=%u\n",
-			raw, flags.visca_enable, flags.visca_ack, flags.visca_error, flags.motion_detect_alarm, flags.network_change, flags.system_camera_pll_lock);
-
-		if (flags.network_change) {
-			pr_info("[lvicam] network_change set, waiting 10s before sending VISCA commands\n");
+		raw = lvicam_flags_read(FPGA_FLAG_NETWORK_CHANGE);
+		if (raw) {
+			pr_info("[lvicam] network_change set, waiting 5s before sending VISCA commands\n");
 			msleep(5000);
-			network_change_ready = true;
+			if (lv)
+				lv->network_change_ready = true;
 			return 0;
 		}
 
 		usleep_range(1000, 2000);
 	} while (time_before(jiffies, timeout));
 
-	pr_err("[lvicam] Timeout waiting for FPGA network_change bit (flags=0x%02X)\n", raw);
+	pr_err("[lvicam] Timeout waiting for FPGA network_change bit\n");
 	return -ETIMEDOUT;
 }
 
@@ -1561,49 +1616,46 @@ static int lvicam_fpga_wait_network_change(void)
 
 /**
  * lvicam_fpga_wait_visca_ack - Poll FPGA_FLAGS_INIT_STATUS_REG until the
- * visca_ack bit is set, indicating the FPGA has received the camera's ACK
- * and is ready to accept the next VISCA command.
+ * visca_enable bit (or visca_ack) is set, indicating the FPGA has received
+ * the camera's ACK and is ready to accept the next VISCA command.
+ *
+ * Reads the FPGA directly; the cached flags are too stale for this
+ * time-critical handshake.
+ *
+ * Returns 0 on success, -EIO when the FPGA latches visca_error (the link is
+ * wedged and cannot accept further commands until it is re-established).
  */
-static int lvicam_fpga_wait_visca_ack(void)
+static int lvicam_fpga_wait_visca_ack(const visca_cmd_t *visca)
 {
 	unsigned long timeout = jiffies + msecs_to_jiffies(VISCA_ACK_TIMEOUT_MS);
-	FPGAFlagsInit_t flags;
-	uint8_t raw = 0;
-	bool saw_visca_error = false;
-	int ret;
-
-	/* Wait 20ms after the VISCA command was written before polling,
-	 * to avoid congesting the FPGA while it processes the command. */
-	// msleep(2);
+	char hexbuf[(VISCA_MAX_CMD_SIZE * 3) + 1];
+	uint8_t raw;
+	int i, pos;
 
 	do {
-		ret = fpga_i2c_read(FPGA_FLAGS_INIT_STATUS_REG, &raw);
-		if (ret)
-			return ret;
+		if (fpga_i2c_read(FPGA_FLAGS_INIT_STATUS_REG, &raw))
+			return -EIO;
 
-		memcpy(&flags, &raw, sizeof(flags));
-
-		if (flags.visca_enable) {
-			pr_info("[lvicam] FPGA visca_enable set (flags=0x%02X)\n", raw);
+		if (raw & FPGA_FLAG_VISCA_ENABLE) {
+			pr_info("[lvicam] FPGA visca_enable set\n");
 			return 0;
 		}
 
-		if (flags.visca_error && !saw_visca_error) {
-			/* visca_error appears to be sticky in this firmware, so keep
-			 * waiting for visca_enable instead of aborting or returning early.
-			 */
-			pr_warn("[lvicam] FPGA visca_error set while waiting for visca_enable (flags=0x%02X)\n", raw);
-			saw_visca_error = true;
+		if (raw & FPGA_FLAG_VISCA_ERROR) {
+			pos = 0;
+			for (i = 0; i < visca->size && i < VISCA_MAX_CMD_SIZE; i++)
+				pos += scnprintf(hexbuf + pos, sizeof(hexbuf) - pos, "%02X ", visca->data[i]);
+			pr_err("[lvicam] FPGA visca_error for cmd: %s - VISCA link is "
+			       "latched, further commands will fail until the camera "
+			       "link is re-established\n",
+			       hexbuf);
+			return -EIO;
 		}
 
 		usleep_range(2500, 5000);
 	} while (time_before(jiffies, timeout));
 
-	/* Some firmware revisions do not surface a reliable visca_enable bit.
-	 * Preserve command sequencing by waiting up to the timeout, then allow
-	 * the next command to proceed instead of aborting the whole sequence.
-	 */
-	pr_warn("[lvicam] visca_enable not set after timeout (flags=0x%02X), continuing\n", raw);
+	pr_warn("[lvicam] visca_enable not set after timeout, continuing\n");
 	return 0;
 }
 
@@ -1654,7 +1706,39 @@ static int lvicam_fpga_visca_write(const visca_cmd_t *visca)
 
 	msleep(10);
 
-	return lvicam_fpga_wait_visca_ack();
+	ret = lvicam_fpga_wait_visca_ack(visca);
+	if (ret < 0 && lvicam_ctrl.lvicam_ptr) {
+		struct lvicam *lv = lvicam_ctrl.lvicam_ptr;
+
+		/*
+		 * The FPGA latches visca_error and drops visca_enable until
+		 * the camera link is re-established.  Power-cycle the camera
+		 * once via the onoff GPIO (same sequence as the ctrl device
+		 * init) and retry the command a single time.
+		 */
+		pr_warn("[lvicam] VISCA error, power-cycling camera link and retrying once\n");
+		if (lv->onoff_gpio) {
+			lvicam_gpio_off_set(lv);
+			usleep_range(150000, 155000);
+			lvicam_gpio_on_set(lv);
+		}
+		lv->network_change_ready = false;
+
+		ret = lvicam_fpga_wait_network_change();
+		if (ret)
+			return ret;
+
+		ret = i2c_transfer(lvicam_ctrl.adapter, &msg, 1);
+		if (ret != 1) {
+			pr_err("[%s] VISCA i2c write retry failed: %d\n", __func__, ret);
+			return -EIO;
+		}
+
+		msleep(10);
+		ret = lvicam_fpga_wait_visca_ack(visca);
+	}
+
+	return ret;
 }
 
 static int lvicam_fpga_write_word(uint8_t reg, u16 value)
@@ -1700,39 +1784,36 @@ static int lvicam_fpga_read_zoom_pos(uint16_t *zoom_pos)
 #define ZOOM_POLL_INTERVAL_MS 100
 #define ZOOM_POLL_TIMEOUT_MS 10000
 
+#define MOTION_DETECT_CHECK_MS 500
+
 /**
  * lvicam_fpga_wait_camcmd_complete - Poll FPGA bit 6 (visca_ack / CamCmdCompleteFlag)
  *                                    until set, indicating the camera has finished
  *                                    processing the last VISCA command.
+ *
+ * Reads the FPGA directly instead of relying on the cached flags, which can
+ * be stale or consumed by the destructive read in lvicam_fpga_wait_visca_ack.
  *
  * Return: 0 on success, -ETIMEDOUT if bit never set, or negative errno from I2C.
  */
 static int lvicam_fpga_wait_camcmd_complete(void)
 {
 	unsigned long timeout = jiffies + msecs_to_jiffies(ZOOM_POLL_TIMEOUT_MS);
-	FPGAFlagsInit_t flags;
 	uint8_t raw;
-	int ret;
 
 	do {
 		msleep(ZOOM_POLL_INTERVAL_MS);
 
-		ret = fpga_i2c_read(FPGA_FLAGS_INIT_STATUS_REG, &raw);
-		if (ret)
-			return ret;
+		if (fpga_i2c_read(FPGA_FLAGS_INIT_STATUS_REG, &raw))
+			return -EIO;
 
-		memcpy(&flags, &raw, sizeof(flags));
-
-		pr_info("[lvicam] Waiting for CamCmdComplete... flags=0x%02X (ack=%u err=%u ena=%u)\n",
-			raw, flags.visca_ack, flags.visca_error, flags.visca_enable);
-
-		if (flags.visca_ack) {
-			pr_info("[lvicam] CamCmdComplete (visca_ack) set (flags=0x%02X)\n", raw);
+		if (raw & FPGA_FLAG_VISCA_ACK) {
+			pr_info("[lvicam] CamCmdComplete (visca_ack) set\n");
 			return 0;
 		}
 	} while (time_before(jiffies, timeout));
 
-	pr_warn("[lvicam] CamCmdComplete timeout (flags=0x%02X)\n", raw);
+	pr_warn("[lvicam] CamCmdComplete timeout\n");
 	return -ETIMEDOUT;
 }
 
@@ -1740,9 +1821,8 @@ static bool lvicam_is_camera_mode_param(const ConfigParam *param)
 {
 	return param == &confCameraMode[0].Zoom || param == &confCameraMode[0].ZoomMin || param == &confCameraMode[0].ZoomMax || param == &confCameraMode[0].ZoomSpeed ||
 	       param == &confCameraMode[0].Focus || param == &confCameraMode[0].FocusMin || param == &confCameraMode[0].FocusMax || param == &confCameraMode[0].FocusPos ||
-	       param == &confCameraMode[0].FocusAFSpeed || param == &confCameraMode[0].FocusAFMode ||
-	       param == &confCameraMode[0].NaturalColorExposure || param == &confCameraMode[0].ArtificialColorExposure || param == &confCameraMode[0].WhiteBalance ||
-		   param == &confCameraMode[0].PictureEffect;
+	       param == &confCameraMode[0].FocusAFSpeed || param == &confCameraMode[0].FocusAFMode || param == &confCameraMode[0].NaturalColorExposure ||
+	       param == &confCameraMode[0].ArtificialColorExposure || param == &confCameraMode[0].WhiteBalance || param == &confCameraMode[0].PictureEffect;
 }
 
 static void lvicam_load_camera_mode(lvicam_cameramode_config_t *config, unsigned int mode_index)
@@ -1839,15 +1919,11 @@ static int lvicamera_apply_visca_init(struct lvicam *lvicam_device, unsigned int
 	{
 		uint8_t pic_mode = 0;
 		if (fpga_i2c_read(PICTURE_MODE_STATUS_REG, &pic_mode) == 0) {
-			lvicam_device->color_mode = (pic_mode & PICTURE_MODE_NAT_ON)
-				? COLOR_MODE_NATURAL : COLOR_MODE_ARTIFICIAL;
+			lvicam_device->color_mode = (pic_mode & PICTURE_MODE_NAT_ON) ? COLOR_MODE_NATURAL : COLOR_MODE_ARTIFICIAL;
 		} else {
 			lvicam_device->color_mode = COLOR_MODE_NATURAL;
 		}
-		pr_info("[%s] Initial color mode: %s (reg 0xCC = 0x%02X)\n",
-			__func__,
-			lvicam_device->color_mode == COLOR_MODE_NATURAL ? "natural" : "artificial",
-			pic_mode);
+		pr_info("[%s] Initial color mode: %s (reg 0xCC = 0x%02X)\n", __func__, lvicam_device->color_mode == COLOR_MODE_NATURAL ? "natural" : "artificial", pic_mode);
 	}
 
 	if (lvicam_device->camera_mode_config.Zoom != 0)
@@ -1856,262 +1932,294 @@ static int lvicamera_apply_visca_init(struct lvicam *lvicam_device, unsigned int
 
 	mutex_lock(&lvicam_device->mutex);
 
-		p = confCameraMode[mode_index].PictureEffect.data;
-		picture_effect = p[0];
+	p = confCameraMode[mode_index].PictureEffect.data;
+	picture_effect = p[0];
 
-		// visca = cam_cancel(2);
-		// ret = lvicam_fpga_visca_write(&visca);
-		// pr_info("[%s] Zoom stop sent\n", __func__);
-		// if (ret)
-		// 	goto out_unlock;
+	// visca = cam_cancel(2);
+	// ret = lvicam_fpga_visca_write(&visca);
+	// pr_info("[%s] Zoom stop sent\n", __func__);
+	// if (ret)
+	// 	goto out_unlock;
 
-		visca = cam_dzoom_mode(1);
-		ret = lvicam_fpga_visca_write(&visca);
-		if (ret)
-			goto out_unlock;
+	visca = cam_dzoom_mode(1);
+	ret = lvicam_fpga_visca_write(&visca);
+	if (ret)
+		goto out_unlock;
 
-		visca = cam_dzoom(DZOOM_ON);
-		ret = lvicam_fpga_visca_write(&visca);
-		if (ret)
-			goto out_unlock;
+	visca = cam_dzoom(DZOOM_ON);
+	ret = lvicam_fpga_visca_write(&visca);
+	if (ret)
+		goto out_unlock;
 
+	if (picture_effect == 0xFF) {
+		pr_warn("[%s] PictureEffect unconfigured (0xFF), skipping\n", __func__);
+	} else {
 		visca = cam_picture_effect(picture_effect);
 		ret = lvicam_fpga_visca_write(&visca);
 		if (ret)
 			goto out_unlock;
+	}
 
-		visca = cam_picture_flip(PICTURE_FLIP_OFF);
-		ret = lvicam_fpga_visca_write(&visca);
-		if (ret)
-			goto out_unlock;
+	visca = cam_picture_flip(PICTURE_FLIP_OFF);
+	ret = lvicam_fpga_visca_write(&visca);
+	if (ret)
+		goto out_unlock;
 
-		visca = cam_lr_reverse(LR_REVERSE_OFF);
-		ret = lvicam_fpga_visca_write(&visca);
-		if (ret)
-			goto out_unlock;
+	visca = cam_lr_reverse(LR_REVERSE_OFF);
+	ret = lvicam_fpga_visca_write(&visca);
+	if (ret)
+		goto out_unlock;
 
-		visca = cam_hr(HR_ON);
-		ret = lvicam_fpga_visca_write(&visca);
-		if (ret)
-			goto out_unlock;
+	visca = cam_hr(HR_ON);
+	ret = lvicam_fpga_visca_write(&visca);
+	if (ret)
+		goto out_unlock;
 
-		p = confCameraMode[mode_index].FocusMin.data;
-		uint16_t focus_min = p[0] | (p[1] << 8);
+	p = confCameraMode[mode_index].FocusMin.data;
+	uint16_t focus_min = p[0] | (p[1] << 8);
+	if (focus_min == 0xFFFF) {
+		pr_warn("[%s] FocusMin unconfigured (0xFFFF), skipping focus near limit\n", __func__);
+	} else {
 		visca = cam_focus_near_limit(focus_min);
 		ret = lvicam_fpga_visca_write(&visca);
 		if (ret)
 			goto out_unlock;
+	}
 
-		p = confCameraMode[mode_index].FocusAFMode.data;
-		uint8_t focus_af_mode = p[0];
+	p = confCameraMode[mode_index].FocusAFMode.data;
+	uint8_t focus_af_mode = p[0];
+	if (focus_af_mode == 0xFF) {
+		pr_warn("[%s] FocusAFMode unconfigured (0xFF), skipping focus mode\n", __func__);
+	} else {
 		visca = cam_focus_mode(focus_af_mode);
 		ret = lvicam_fpga_visca_write(&visca);
 		if (ret)
 			goto out_unlock;
+	}
 
-		p = confCameraMode[mode_index].FocusAFSpeed.data;
-		uint8_t focus_af_speed = p[0];
+	p = confCameraMode[mode_index].FocusAFSpeed.data;
+	uint8_t focus_af_speed = p[0];
+	if (focus_af_speed == 0xFF) {
+		pr_warn("[%s] FocusAFSpeed unconfigured (0xFF), skipping focus speed\n", __func__);
+	} else {
 		visca = cam_focus_speed(focus_af_speed);
 		ret = lvicam_fpga_visca_write(&visca);
 		if (ret)
 			goto out_unlock;
+	}
 
-		p = confCameraMode[mode_index].FocusPos.data;
-		uint16_t focus_pos_val = p[0] | (p[1] << 8);
-		p = confCameraMode[mode_index].FocusMin.data;
-		uint16_t fmin = p[0] | (p[1] << 8);
-		p = confCameraMode[mode_index].FocusMax.data;
-		uint16_t fmax = p[0] | (p[1] << 8);
+	p = confCameraMode[mode_index].FocusPos.data;
+	uint16_t focus_pos_val = p[0] | (p[1] << 8);
+	p = confCameraMode[mode_index].FocusMin.data;
+	uint16_t fmin = p[0] | (p[1] << 8);
+	p = confCameraMode[mode_index].FocusMax.data;
+	uint16_t fmax = p[0] | (p[1] << 8);
 
-		pr_info("[%s] Focus: mode=0x%02X, speed=0x%02X, near_limit=0x%04X, pos=0x%04X, min=0x%04X, max=0x%04X\n",
-			__func__, focus_af_mode, focus_af_speed, focus_min,
-			focus_pos_val, fmin, fmax);
+	pr_info("[%s] Focus: mode=0x%02X, speed=0x%02X, near_limit=0x%04X, pos=0x%04X, min=0x%04X, max=0x%04X\n", __func__, focus_af_mode, focus_af_speed, focus_min, focus_pos_val, fmin, fmax);
 
-		if (focus_af_mode != FOCUS_MODE_AUTO) {
-			if (fmin <= fmax) {
-				if (focus_pos_val < fmin)
-					focus_pos_val = fmin;
-				if (focus_pos_val > fmax)
-					focus_pos_val = fmax;
-			} else {
-				if (focus_pos_val < fmin)
-					focus_pos_val = fmin;
-			}
-			pr_info("[%s] Focus direct position: 0x%04X\n", __func__, focus_pos_val);
+	if (focus_af_mode != FOCUS_MODE_AUTO) {
+		if (fmin <= fmax) {
+			if (focus_pos_val < fmin)
+				focus_pos_val = fmin;
+			if (focus_pos_val > fmax)
+				focus_pos_val = fmax;
+		} else {
+			if (focus_pos_val < fmin)
+				focus_pos_val = fmin;
+		}
+		pr_info("[%s] Focus direct position: 0x%04X\n", __func__, focus_pos_val);
+		if (focus_pos_val == 0xFFFF) {
+			pr_warn("[%s] Focus position unconfigured (0xFFFF), skipping focus direct\n", __func__);
+		} else {
 			visca = cam_focus_direct(focus_pos_val);
 			ret = lvicam_fpga_visca_write(&visca);
 			if (ret)
 				goto out_unlock;
-		} else {
-			pr_info("[%s] Focus in auto mode, skipping direct position\n", __func__);
 		}
+	} else {
+		pr_info("[%s] Focus in auto mode, skipping direct position\n", __func__);
+	}
 
-		p = confCameraMode[mode_index].NaturalColorExposure.data;
-		uint8_t natural_color_exposure = p[0];
-		p = confCameraMode[mode_index].ArtificialColorExposure.data;
-		uint8_t artificial_color_exposure = p[0];
+	p = confCameraMode[mode_index].NaturalColorExposure.data;
+	uint8_t natural_color_exposure = p[0];
+	p = confCameraMode[mode_index].ArtificialColorExposure.data;
+	uint8_t artificial_color_exposure = p[0];
 
-		uint8_t ae_value = (lvicam_device->color_mode == COLOR_MODE_NATURAL)
-			? natural_color_exposure : artificial_color_exposure;
+	uint8_t ae_value = (lvicam_device->color_mode == COLOR_MODE_NATURAL) ? natural_color_exposure : artificial_color_exposure;
+	if (ae_value == 0xFF) {
+		pr_warn("[%s] Exposure mode unconfigured (0xFF), skipping AE mode\n", __func__);
+	} else {
 		visca = cam_ae_mode(ae_value);
 		ret = lvicam_fpga_visca_write(&visca);
 		if (ret)
 			goto out_unlock;
+	}
 
-		if (confCamera.MonitoringMode.data) {
-			visca = cam_monitoring_mode((enum monitoring_mode)*confCamera.MonitoringMode.data);
+	if (confCamera.MonitoringMode.data) {
+		if (*confCamera.MonitoringMode.data == 0xFF) {
+			pr_warn("[%s] MonitoringMode unconfigured (0xFF), skipping\n", __func__);
+		} else {
+			visca = cam_monitoring_mode((enum monitoring_mode) * confCamera.MonitoringMode.data);
 			ret = lvicam_fpga_visca_write(&visca);
 			if (ret)
 				goto out_unlock;
 		}
+	}
 
-		if (confCamera.LVDSMode.data) {
-			visca = cam_lvds_mode((enum lvds_mode)*confCamera.LVDSMode.data);
+	if (confCamera.LVDSMode.data) {
+		if (*confCamera.LVDSMode.data == 0xFF) {
+			pr_warn("[%s] LVDSMode unconfigured (0xFF), skipping\n", __func__);
+		} else {
+			visca = cam_lvds_mode((enum lvds_mode) * confCamera.LVDSMode.data);
 			ret = lvicam_fpga_visca_write(&visca);
 			if (ret)
 				goto out_unlock;
 		}
+	}
 
-		pr_info("[%s] Calculated zoom step increment: %u\n", __func__, zoom_step_increment);
+	pr_info("[%s] Calculated zoom step increment: %u\n", __func__, zoom_step_increment);
 
-		r_gain = *confCamera.RGain.data;
-		b_gain = *confCamera.BGain.data;
-		natcol_exp_comp = (lvicam_device->color_mode == COLOR_MODE_NATURAL)
-			? natural_color_exposure : artificial_color_exposure;
+	r_gain = *confCamera.RGain.data;
+	b_gain = *confCamera.BGain.data;
+	natcol_exp_comp = (lvicam_device->color_mode == COLOR_MODE_NATURAL) ? natural_color_exposure : artificial_color_exposure;
 
-		visca = cam_wb_mode(WB_MODE_MANUAL);
-		ret = lvicam_fpga_visca_write(&visca);
-		if (ret)
-			goto out_unlock;
+	visca = cam_wb_mode(WB_MODE_MANUAL);
+	ret = lvicam_fpga_visca_write(&visca);
+	if (ret)
+		goto out_unlock;
 
+	if (natcol_exp_comp == 0xFF) {
+		pr_warn("[%s] Exposure compensation unconfigured (0xFF), skipping\n", __func__);
+	} else {
 		visca = cam_exp_comp_onoff(EXP_COMP_ON);
 		ret = lvicam_fpga_visca_write(&visca);
 		if (ret)
 			goto out_unlock;
 
-		
 		visca = cam_exp_comp_direct(natcol_exp_comp);
 		ret = lvicam_fpga_visca_write(&visca);
 		if (ret)
 			goto out_unlock;
+	}
 
+	if (r_gain == 0xFF) {
+		pr_warn("[%s] RGain unconfigured (0xFF), skipping\n", __func__);
+	} else {
 		visca = cam_r_gain_direct(r_gain);
 		ret = lvicam_fpga_visca_write(&visca);
 		if (ret)
 			goto out_unlock;
+	}
 
+	if (b_gain == 0xFF) {
+		pr_warn("[%s] BGain unconfigured (0xFF), skipping\n", __func__);
+	} else {
 		visca = cam_b_gain_direct(b_gain);
 		ret = lvicam_fpga_visca_write(&visca);
 		if (ret)
 			goto out_unlock;
+	}
 
-		p = confCameraMode[mode_index].NoiseReduction2D3D.data;
-		uint8_t nr_2d = (p[0] >> 4) & 0x0F;
-		uint8_t nr_3d = p[0] & 0x0F;
+	p = confCameraMode[mode_index].NoiseReduction2D3D.data;
+	uint8_t nr_2d = (p[0] >> 4) & 0x0F;
+	uint8_t nr_3d = p[0] & 0x0F;
+	if (p[0] == 0xFF) {
+		pr_warn("[%s] NoiseReduction unconfigured (0xFF), skipping\n", __func__);
+	} else {
 		visca = cam_nr_2D3D_independent((nr_2d << 4) | nr_3d);
 		ret = lvicam_fpga_visca_write(&visca);
 		if (ret)
 			goto out_unlock;
+	}
 
-		p = confCameraMode[mode_index].Zoom.data;
-		uint16_t cfg_zoom = p[0] | (p[1] << 8);
-		p = confCameraMode[mode_index].ZoomMin.data;
-		uint16_t cfg_zoom_min = p[0] | (p[1] << 8);
-		p = confCameraMode[mode_index].ZoomMax.data;
-		uint16_t cfg_zoom_max = p[0] | (p[1] << 8);
-		p = confCameraMode[mode_index].ZoomSpeed.data;
-		uint16_t cfg_zoom_speed = p[0] | (p[1] << 8);
+	p = confCameraMode[mode_index].Zoom.data;
+	uint16_t cfg_zoom = p[0] | (p[1] << 8);
+	p = confCameraMode[mode_index].ZoomMin.data;
+	uint16_t cfg_zoom_min = p[0] | (p[1] << 8);
+	p = confCameraMode[mode_index].ZoomMax.data;
+	uint16_t cfg_zoom_max = p[0] | (p[1] << 8);
+	p = confCameraMode[mode_index].ZoomSpeed.data;
+	uint16_t cfg_zoom_speed = p[0] | (p[1] << 8);
 
-		uint16_t zoom_to_apply = (lvicam_device->saved_zoom[mode_index] != 0)
-			? lvicam_device->saved_zoom[mode_index] : cfg_zoom;
-		bool zoom_from_saved = (lvicam_device->saved_zoom[mode_index] != 0);
+	uint16_t zoom_to_apply = (lvicam_device->saved_zoom[mode_index] != 0) ? lvicam_device->saved_zoom[mode_index] : cfg_zoom;
+	bool zoom_from_saved = (lvicam_device->saved_zoom[mode_index] != 0);
 
-		if (zoom_to_apply < cfg_zoom_min)
-			zoom_to_apply = cfg_zoom_min;
-		if (zoom_to_apply > cfg_zoom_max)
-			zoom_to_apply = cfg_zoom_max;
+	if (zoom_to_apply < cfg_zoom_min)
+		zoom_to_apply = cfg_zoom_min;
+	if (zoom_to_apply > cfg_zoom_max)
+		zoom_to_apply = cfg_zoom_max;
 
+	uint16_t zoom_speed_saved = lvicam_device->camera_mode_config.ZoomSpeed;
 
-		uint16_t zoom_speed_saved = lvicam_device->camera_mode_config.ZoomSpeed;
+	if (zoom_to_apply == 0xFFFF) {
+		pr_warn("[%s] Zoom unconfigured (0xFFFF), skipping zoom direct commands\n", __func__);
+	}
+	// else {
+	// visca = cam_zoom_direct_variable(zoom_to_apply);
+	// ret = lvicam_fpga_visca_write(&visca);
+	// pr_info("[%s] Zoom direct speed %d: 0x%04X\n", __func__, zoom_speed_saved, zoom_to_apply);
+	// if (ret)
+	// 	goto out_unlock;
 
-		visca = cam_zoom_direct_variable(zoom_to_apply);
-		ret = lvicam_fpga_visca_write(&visca);
-		pr_info("[%s] Zoom direct speed %d: 0x%04X\n", __func__, zoom_speed_saved, zoom_to_apply);
-		if (ret)
-			goto out_unlock;
+	// lvicam_device->camera_mode_config.ZoomSpeed = zoom_speed_saved;
+	// visca = cam_zoom_direct(zoom_to_apply);
+	// ret = lvicam_fpga_visca_write(&visca);
+	// if (ret)
+	// 	goto out_unlock;
 
-		lvicam_device->camera_mode_config.ZoomSpeed = zoom_speed_saved;
-		visca = cam_zoom_direct_variable(zoom_to_apply);
-		ret = lvicam_fpga_visca_write(&visca);
-		if (ret)
-			goto out_unlock;
+	// lvicam_fpga_wait_camcmd_complete();
+	// }
 
-		lvicam_fpga_wait_camcmd_complete();
+	/* Motion Detection - Frame 0 */
+	uint8_t md_enable = confCamera.MDEnable.data[0];
+	uint8_t md_threshold = confCamera.MDThreshold.data[0];
+	uint8_t md_interval = confCamera.MDIntervalTime.data[0];
+	uint8_t md_pp = confCamera.MDStartPos.data[1];
+	uint8_t md_qq = confCamera.MDStartPos.data[0];
+	uint8_t md_rr = confCamera.MDStopPos.data[1];
+	uint8_t md_ss = confCamera.MDStopPos.data[0];
 
-		/* Motion Detection - Frame 0 */
-		uint8_t md_enable = confCamera.MDEnable.data[0];
-		uint8_t md_threshold = confCamera.MDThreshold.data[0];
-		uint8_t md_interval = confCamera.MDIntervalTime.data[0];
-		uint8_t md_pp = confCamera.MDStartPos.data[1];
-		uint8_t md_qq = confCamera.MDStartPos.data[0];
-		uint8_t md_rr = confCamera.MDStopPos.data[1];
-		uint8_t md_ss = confCamera.MDStopPos.data[0];
+	if (md_enable == 0xFF) {
+		pr_warn("[%s] Motion detection unconfigured (0xFF), skipping\n", __func__);
+		goto md_done;
+	}
 
-		// visca = cam_md(md_enable ? MD_MODE_ON : MD_MODE_OFF);
-		// ret = lvicam_fpga_visca_write(&visca);
-		// if (ret)
-		// 	goto out_unlock;
+	visca = cam_md(md_enable ? MD_MODE_ON : MD_MODE_OFF);
+	ret = lvicam_fpga_visca_write(&visca);
+	if (ret)
+		goto out_unlock;
 
-		// visca = cam_md_function_set(MD_DISPLAY_MODE_ON,
-		// 			    MD_DETECTION_FRAME0,
-		// 			    md_threshold,
-		// 			    md_interval);
-		// ret = lvicam_fpga_visca_write(&visca);r
-		// if (ret)
-		// 	goto out_unlock;
+	visca = cam_md_function_set(MD_DISPLAY_MODE_ON, MD_DETECTION_FRAME0, md_threshold, md_interval);
+	ret = lvicam_fpga_visca_write(&visca);
+	if (ret)
+		goto out_unlock;
 
-		// visca = cam_md_window_set(MD_SELECT_DETECTION_FRAME0,
-		// 			   md_pp, md_qq, md_rr, md_ss);
-		// ret = lvicam_fpga_visca_write(&visca);
-		// if (ret)
-		// 	goto out_unlock;
+	visca = cam_md_window_set(MD_SELECT_DETECTION_FRAME0, md_pp, md_qq, md_rr, md_ss);
+	ret = lvicam_fpga_visca_write(&visca);
+	if (ret)
+		goto out_unlock;
 
-		
+md_done:
 
-		p = confCameraMode[mode_index].Focus.data;
-		uint8_t cfg_focus = p[0];
-		p = confCameraMode[mode_index].ArtificialColorExposure.data;
-		uint8_t cfg_art_col_exp = p[0];
-		p = confCameraMode[mode_index].WhiteBalance.data;
-		uint8_t cfg_wb = p[0];
+	p = confCameraMode[mode_index].Focus.data;
+	uint8_t cfg_focus = p[0];
+	p = confCameraMode[mode_index].ArtificialColorExposure.data;
+	uint8_t cfg_art_col_exp = p[0];
+	p = confCameraMode[mode_index].WhiteBalance.data;
+	uint8_t cfg_wb = p[0];
 
-		pr_info("[%s] Applied mode %u: Zoom=0x%04X%s Min=0x%04X Max=0x%04X Speed=0x%04X\n",
-			__func__, mode_index, zoom_to_apply,
-			zoom_from_saved ? " (saved)" : "",
-			cfg_zoom_min, cfg_zoom_max, cfg_zoom_speed);
-		pr_info("[%s] Applied mode %u: Focus=0x%02X Pos=0x%04X Min=0x%04X Max=0x%04X\n",
-			__func__, mode_index, cfg_focus, focus_pos_val, fmin, fmax);
-		pr_info("[%s] Applied mode %u: FocusAFMode=0x%02X AFSpeed=0x%02X\n",
-			__func__, mode_index, focus_af_mode, focus_af_speed);
-		pr_info("[%s] Applied mode %u: NatColExp=0x%02X ArtColExp=0x%02X WB=0x%02X PicEffect=0x%02X (active=%s)\n",
-			__func__, mode_index, natural_color_exposure, cfg_art_col_exp, cfg_wb, picture_effect,
-			lvicam_device->color_mode == COLOR_MODE_NATURAL ? "natural" : "artificial");
-		pr_info("[%s] Applied mode %u: NoiseReduction2D3D=0x%02X (2D=0x%X 3D=0x%X)\n",
-			__func__, mode_index, (nr_2d << 4) | nr_3d, nr_2d, nr_3d);
-		pr_info("[%s] Applied color gains: RGain=0x%02X BGain=0x%02X\n", __func__, r_gain, b_gain);
-		pr_info("[%s] Applied exposure compensation: %d\n", __func__, EXP_COMP_ON);
-		pr_info("[%s] Applied exposure compensation setting: %d (%s)\n", __func__,
-			(uint8_t)natcol_exp_comp,
-			lvicam_device->color_mode == COLOR_MODE_NATURAL ? "natural" : "artificial");
-		pr_info("[%s] MD: enable=%u threshold=0x%02X interval=%u start=(0x%02X,0x%02X) stop=(0x%02X,0x%02X)\n",
-			__func__,
-			confCamera.MDEnable.data[0],
-			confCamera.MDThreshold.data[0],
-			confCamera.MDIntervalTime.data[0],
-			confCamera.MDStartPos.data[1],
-			confCamera.MDStartPos.data[0],
-			confCamera.MDStopPos.data[1],
-			confCamera.MDStopPos.data[0]);
+	pr_info("[%s] Applied mode %u: Zoom=0x%04X%s Min=0x%04X Max=0x%04X Speed=0x%04X\n", __func__, mode_index, zoom_to_apply, zoom_from_saved ? " (saved)" : "", cfg_zoom_min, cfg_zoom_max,
+		cfg_zoom_speed);
+	pr_info("[%s] Applied mode %u: Focus=0x%02X Pos=0x%04X Min=0x%04X Max=0x%04X\n", __func__, mode_index, cfg_focus, focus_pos_val, fmin, fmax);
+	pr_info("[%s] Applied mode %u: FocusAFMode=0x%02X AFSpeed=0x%02X\n", __func__, mode_index, focus_af_mode, focus_af_speed);
+	pr_info("[%s] Applied mode %u: NatColExp=0x%02X ArtColExp=0x%02X WB=0x%02X PicEffect=0x%02X (active=%s)\n", __func__, mode_index, natural_color_exposure, cfg_art_col_exp, cfg_wb,
+		picture_effect, lvicam_device->color_mode == COLOR_MODE_NATURAL ? "natural" : "artificial");
+	pr_info("[%s] Applied mode %u: NoiseReduction2D3D=0x%02X (2D=0x%X 3D=0x%X)\n", __func__, mode_index, (nr_2d << 4) | nr_3d, nr_2d, nr_3d);
+	pr_info("[%s] Applied color gains: RGain=0x%02X BGain=0x%02X\n", __func__, r_gain, b_gain);
+	pr_info("[%s] Applied exposure compensation: %d\n", __func__, EXP_COMP_ON);
+	pr_info("[%s] Applied exposure compensation setting: %d (%s)\n", __func__, (uint8_t)natcol_exp_comp, lvicam_device->color_mode == COLOR_MODE_NATURAL ? "natural" : "artificial");
+	pr_info("[%s] MD: enable=%u threshold=0x%02X interval=%u start=(0x%02X,0x%02X) stop=(0x%02X,0x%02X)\n", __func__, confCamera.MDEnable.data[0], confCamera.MDThreshold.data[0],
+		confCamera.MDIntervalTime.data[0], confCamera.MDStartPos.data[1], confCamera.MDStartPos.data[0], confCamera.MDStopPos.data[1], confCamera.MDStopPos.data[0]);
 
 	lvicam_load_camera_mode(&lvicam_device->camera_mode_config, mode_index);
 	lvicam_device->camera_mode_config.Zoom = zoom_to_apply;
@@ -2126,14 +2234,10 @@ static bool lvicam_param_needs_apply(const ConfigParam *param)
 {
 	return param == &confCameraMode[0].Zoom || param == &confCameraMode[0].ZoomMin || param == &confCameraMode[0].ZoomMax || param == &confCameraMode[0].ZoomSpeed ||
 	       param == &confCameraMode[0].Focus || param == &confCameraMode[0].FocusMin || param == &confCameraMode[0].FocusMax || param == &confCameraMode[0].FocusPos ||
-	       param == &confCameraMode[0].FocusAFSpeed || param == &confCameraMode[0].FocusAFMode ||
-	       param == &confCameraMode[0].NaturalColorExposure || param == &confCameraMode[0].ArtificialColorExposure || param == &confCameraMode[0].WhiteBalance ||
-		   param == &confCameraMode[0].PictureEffect || param == &confCameraMode[0].NoiseReduction2D3D ||
-		   param == &confCamera.RGain || param == &confCamera.BGain ||
-		   param == &confCamera.MonitoringMode || param == &confCamera.LVDSMode ||
-		   param == &confCamera.MDEnable || param == &confCamera.MDThreshold ||
-		   param == &confCamera.MDIntervalTime || param == &confCamera.MDStartPos ||
-		   param == &confCamera.MDStopPos;
+	       param == &confCameraMode[0].FocusAFSpeed || param == &confCameraMode[0].FocusAFMode || param == &confCameraMode[0].NaturalColorExposure ||
+	       param == &confCameraMode[0].ArtificialColorExposure || param == &confCameraMode[0].WhiteBalance || param == &confCameraMode[0].PictureEffect ||
+	       param == &confCameraMode[0].NoiseReduction2D3D || param == &confCamera.RGain || param == &confCamera.BGain || param == &confCamera.MonitoringMode || param == &confCamera.LVDSMode ||
+	       param == &confCamera.MDEnable || param == &confCamera.MDThreshold || param == &confCamera.MDIntervalTime || param == &confCamera.MDStartPos || param == &confCamera.MDStopPos;
 }
 
 static void lvicam_camera_mode_work(struct work_struct *work)
@@ -2154,9 +2258,7 @@ static void lvicam_camera_mode_work(struct work_struct *work)
 			mode_index = lvicam_soc->seesaw_override;
 		else if (lvicam_soc->seesaw_gpio)
 			mode_index = gpiod_get_value(lvicam_soc->seesaw_gpio) ? 0 : 1;
-		pr_info("[%s] seesaw_override=%d, seesaw_gpio=%d, mode_index=%u\n", __func__,
-			lvicam_soc->seesaw_override,
-			lvicam_soc->seesaw_gpio ? gpiod_get_value(lvicam_soc->seesaw_gpio) : -1,
+		pr_info("[%s] seesaw_override=%d, seesaw_gpio=%d, mode_index=%u\n", __func__, lvicam_soc->seesaw_override, lvicam_soc->seesaw_gpio ? gpiod_get_value(lvicam_soc->seesaw_gpio) : -1,
 			mode_index);
 
 		ret = lvicamera_apply_visca_init(lvicam_soc, mode_index);
@@ -2195,23 +2297,15 @@ visca_cmd_t convert_subreg_to_visca(uint8_t reg, uint32_t value)
 	case VISCA_CMD_NR_2D:
 		if (value <= NR_2D_MODE_5) {
 			lvicam->camera_mode_config.NoiseReduction2D = (uint8_t)value;
-			confCameraMode[0].NoiseReduction2D3D.data[0] =
-				(lvicam->camera_mode_config.NoiseReduction2D << 4) |
-				lvicam->camera_mode_config.NoiseReduction3D;
+			confCameraMode[0].NoiseReduction2D3D.data[0] = (lvicam->camera_mode_config.NoiseReduction2D << 4) | lvicam->camera_mode_config.NoiseReduction3D;
 		}
-		return cam_nr_2D3D_independent(
-			(lvicam->camera_mode_config.NoiseReduction2D << 4) |
-			lvicam->camera_mode_config.NoiseReduction3D);
+		return cam_nr_2D3D_independent((lvicam->camera_mode_config.NoiseReduction2D << 4) | lvicam->camera_mode_config.NoiseReduction3D);
 	case VISCA_CMD_NR_3D:
 		if (value <= NR_3D_MODE_5) {
 			lvicam->camera_mode_config.NoiseReduction3D = (uint8_t)value;
-			confCameraMode[0].NoiseReduction2D3D.data[0] =
-				(lvicam->camera_mode_config.NoiseReduction2D << 4) |
-				lvicam->camera_mode_config.NoiseReduction3D;
+			confCameraMode[0].NoiseReduction2D3D.data[0] = (lvicam->camera_mode_config.NoiseReduction2D << 4) | lvicam->camera_mode_config.NoiseReduction3D;
 		}
-		return cam_nr_2D3D_independent(
-			(lvicam->camera_mode_config.NoiseReduction2D << 4) |
-			lvicam->camera_mode_config.NoiseReduction3D);
+		return cam_nr_2D3D_independent((lvicam->camera_mode_config.NoiseReduction2D << 4) | lvicam->camera_mode_config.NoiseReduction3D);
 	case VISCA_CMD_MONITORING_MODE:
 		if (confCamera.MonitoringMode.data)
 			confCamera.MonitoringMode.data[0] = (uint8_t)value;
@@ -2287,8 +2381,7 @@ static long lvicam_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 					visca_cmd_t visca;
 
 					lvicam_ctrl.lvicam_ptr->color_mode = new_mode;
-					pr_info("[%s] Color mode changed to %s\n", __func__,
-						new_mode == COLOR_MODE_NATURAL ? "natural" : "artificial");
+					pr_info("[%s] Color mode changed to %s\n", __func__, new_mode == COLOR_MODE_NATURAL ? "natural" : "artificial");
 
 					if (new_mode == COLOR_MODE_NATURAL)
 						p = confCameraMode[lvicam_ctrl.lvicam_ptr->active_mode_index].NaturalColorExposure.data;
@@ -2298,11 +2391,10 @@ static long lvicam_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 					visca = cam_exp_comp_direct(exp_value);
 					lvicam_fpga_visca_write(&visca);
-					pr_info("[%s] Applied exposure compensation: %d (%s)\n", __func__,
-						exp_value, new_mode == COLOR_MODE_NATURAL ? "natural" : "artificial");
+					pr_info("[%s] Applied exposure compensation: %d (%s)\n", __func__, exp_value, new_mode == COLOR_MODE_NATURAL ? "natural" : "artificial");
 				}
 			}
-skip_color_mode_track:
+		skip_color_mode_track:
 
 			return 0;
 		}
@@ -2317,8 +2409,7 @@ skip_color_mode_track:
 		}
 
 		ret = lvicam_fpga_visca_write(&visca);
-		if (!ret && (i2c_cmd.subreg == VISCA_CMD_ZOOM_DIRECT ||
-			     i2c_cmd.subreg == VISCA_CMD_ZOOM_STEP))
+		if (!ret && (i2c_cmd.subreg == VISCA_CMD_ZOOM_DIRECT || i2c_cmd.subreg == VISCA_CMD_ZOOM_STEP))
 			lvicam_fpga_wait_camcmd_complete();
 
 		return 0;
@@ -2454,8 +2545,7 @@ static int debugfs_fpga_write(uint8_t reg, uint8_t data)
 	return fpga_i2c_write(reg, &data, 1);
 }
 
-static ssize_t lvicam_debugfs_write(struct file *file, const char __user *ubuf,
-				    size_t count, loff_t *ppos)
+static ssize_t lvicam_debugfs_write(struct file *file, const char __user *ubuf, size_t count, loff_t *ppos)
 {
 	struct lvicam *lv = file_inode(file)->i_private;
 	const struct dentry *dentry = file_dentry(file);
@@ -2549,8 +2639,7 @@ static const struct file_operations lvicam_debugfs_fops = {
 	.write = lvicam_debugfs_write,
 };
 
-#define LVICAM_DEBUGFS_FILE(name) \
-	debugfs_create_file(name, 0200, lvicam_debugfs_dir, lv, &lvicam_debugfs_fops)
+#define LVICAM_DEBUGFS_FILE(name) debugfs_create_file(name, 0200, lvicam_debugfs_dir, lv, &lvicam_debugfs_fops)
 
 static void lvicam_debugfs_init(struct lvicam *lv)
 {
@@ -2712,6 +2801,10 @@ static int lvicam_lviconfig_notifier(struct notifier_block *nb, unsigned long ac
 
 	mod_delayed_work(system_wq, &lvicam_soc->camera_mode_work, msecs_to_jiffies(100));
 
+	/* Restart motion detect polling when MDEnable is turned on */
+	if (param == &confCamera.MDEnable && confCamera.MDEnable.data[0])
+		mod_delayed_work(system_wq, &lvicam_soc->motion_detect_work, msecs_to_jiffies(MOTION_DETECT_CHECK_MS));
+
 	return NOTIFY_OK;
 }
 
@@ -2721,22 +2814,25 @@ static void lvicam_motion_detect_work(struct work_struct *work)
 {
 	struct delayed_work *delayed_work = to_delayed_work(work);
 	struct lvicam *lvicam = container_of(delayed_work, struct lvicam, motion_detect_work);
-	FPGAFlagsInit_t flags;
 	uint8_t raw;
-	int ret;
 
-	ret = fpga_i2c_read(FPGA_FLAGS_INIT_STATUS_REG, &raw);
-	if (ret)
-		goto reschedule;
+	mutex_lock(&lvicam->mutex);
 
-	memcpy(&flags, &raw, sizeof(flags));
+	if (!confCamera.MDEnable.data[0]) {
+		lvicam->motion_detect_prev = false;
+		mutex_unlock(&lvicam->mutex);
+		return;
+	}
 
-	if (flags.motion_detect_alarm)
-		pr_info("[lvicam] Motion detected!\n");
+	raw = lvicam_flags_read(FPGA_FLAG_MOTION_DETECT);
+	if (raw && !lvicam->motion_detect_prev)
+		kill_fasync(&lvicam_async_queue, SIGIO, POLL_IN);
 
-reschedule:
-	mod_delayed_work(system_wq, &lvicam->motion_detect_work,
-			 msecs_to_jiffies(MOTION_DETECT_POLL_MS));
+	lvicam->motion_detect_prev = !!raw;
+
+	mutex_unlock(&lvicam->mutex);
+
+	mod_delayed_work(system_wq, &lvicam->motion_detect_work, msecs_to_jiffies(MOTION_DETECT_CHECK_MS));
 }
 
 static int lvicam_probe(struct i2c_client *client)
@@ -2785,10 +2881,14 @@ static int lvicam_probe(struct i2c_client *client)
 
 	// Initialize mutex early
 	mutex_init(&lvicam->mutex);
+	spin_lock_init(&lvicam->flags_lock);
+	init_waitqueue_head(&lvicam->flags_wq);
 	INIT_DELAYED_WORK(&lvicam->camera_mode_work, lvicam_camera_mode_work);
 	INIT_DELAYED_WORK(&lvicam->motion_detect_work, lvicam_motion_detect_work);
-	mod_delayed_work(system_wq, &lvicam->motion_detect_work,
-			 msecs_to_jiffies(MOTION_DETECT_POLL_MS));
+	INIT_DELAYED_WORK(&lvicam->fpga_flags_work, lvicam_fpga_flags_work);
+	if (confCamera.MDEnable.data[0])
+		mod_delayed_work(system_wq, &lvicam->motion_detect_work, msecs_to_jiffies(MOTION_DETECT_CHECK_MS));
+	mod_delayed_work(system_wq, &lvicam->fpga_flags_work, msecs_to_jiffies(FPGA_FLAGS_POLL_MS));
 
 	// Initialize v4l2 subdev early so we can use v4l2_err if needed
 	v4l2_i2c_subdev_init(&lvicam->sd, client, &lvicam_subdev_ops);
@@ -2922,8 +3022,7 @@ static int lvicam_probe(struct i2c_client *client)
 		unsigned int mode_index = 0;
 		if (lvicam->seesaw_gpio)
 			mode_index = gpiod_get_value(lvicam->seesaw_gpio) ? 0 : 1;
-		pr_info("[%s] seesaw=%d, mode_index=%u\n", __func__,
-			lvicam->seesaw_gpio ? gpiod_get_value(lvicam->seesaw_gpio) : -1, mode_index);
+		pr_info("[%s] seesaw=%d, mode_index=%u\n", __func__, lvicam->seesaw_gpio ? gpiod_get_value(lvicam->seesaw_gpio) : -1, mode_index);
 
 		err = lvicamera_apply_visca_init(lvicam, mode_index);
 	}
@@ -2956,18 +3055,19 @@ static int lvicam_remove(struct i2c_client *client)
 	lviconfig_unregister_notifier(&lvicam->lviconfig_nb);
 	cancel_delayed_work_sync(&lvicam->camera_mode_work);
 	cancel_delayed_work_sync(&lvicam->motion_detect_work);
+	cancel_delayed_work_sync(&lvicam->fpga_flags_work);
 
 	lvicam_debugfs_cleanup();
 
 	pr_info("[%s] Resetting toshiba.\n", __func__);
 	if (lvicam->reset_gpio)
-		gpiod_set_value(lvicam->reset_gpio, 0);
+		gpiod_set_value_cansleep(lvicam->reset_gpio, 0);
 	pr_info("[%s] De-asserting power pin.\n", __func__);
 	if (lvicam->power_gpio)
-		gpiod_set_value(lvicam->power_gpio, 0);
+		gpiod_set_value_cansleep(lvicam->power_gpio, 0);
 	pr_info("[%s] Setting the onoff gpio LOW.\n", __func__);
 	if (lvicam->onoff_gpio)
-		gpiod_set_value(lvicam->onoff_gpio, 0);
+		gpiod_set_value_cansleep(lvicam->onoff_gpio, 0);
 
 	v4l2_async_unregister_subdev(sd);
 	media_entity_cleanup(&sd->entity);

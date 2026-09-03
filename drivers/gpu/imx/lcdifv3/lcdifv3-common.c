@@ -725,6 +725,7 @@ static long lcdifv3_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 		*(confMonitorMode[0].ColorGainR.data) = csc_params.r_gain;
 		*(confMonitorMode[0].ColorGainG.data) = csc_params.g_gain;
 		*(confMonitorMode[0].ColorGainB.data) = csc_params.b_gain;
+		
 
 		lcdifv3_build_color_matrix(color_matrix, csc_params.brightness, csc_params.contrast, csc_params.saturation, csc_params.r_gain, csc_params.g_gain, csc_params.b_gain);
 		// pr_info("[%s] lcdifv3_ioctl: Color matrix calculated.\n",
@@ -827,14 +828,17 @@ static int lcdifv3_lviconfig_notifier(struct notifier_block *nb,
 	g_gain     = *(confMonitorMode[0].ColorGainG.data);
 	b_gain     = *(confMonitorMode[0].ColorGainB.data);
 
-	if (brightness == 0xFF && contrast == 0xFF && saturation == 0xFF) {
+	if (brightness == 0x00){
 		brightness = 128;
+	} else if (contrast == 0x00){
 		contrast   = 128;
+	} else if (saturation == 0x00){
 		saturation = 128;
-	}
-	if (r_gain == 0xFF && g_gain == 0xFF && b_gain == 0xFF) {
+	} else if (r_gain == 0x00){
 		r_gain = 128;
+	} else if (g_gain == 0x00){
 		g_gain = 128;
+	} else if (b_gain == 0x00){
 		b_gain = 128;
 	}
 
